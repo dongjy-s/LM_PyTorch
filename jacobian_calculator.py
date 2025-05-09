@@ -81,13 +81,13 @@ class RokaeRobot:
         cos_alpha = math.cos(alpha_rad)
         sin_alpha = math.sin(alpha_rad)
         
-        # 对theta_deg的偏导数 (#* 已经检查无错误)
+        # 对theta_deg的偏导数 
         dA_dtheta = np.array([
             [-sin_theta, -cos_theta, 0, 0],
             [cos_theta*cos_alpha, -sin_theta*cos_alpha, 0, 0],
             [cos_theta*sin_alpha, -sin_theta*sin_alpha, 0, 0],
             [0, 0, 0, 0]
-        ]) * deg2rad
+        ])  * deg2rad
         
         # 对alpha_deg的偏导数 
         dA_dalpha = np.array([
@@ -95,7 +95,7 @@ class RokaeRobot:
             [-sin_theta*sin_alpha, -cos_theta*sin_alpha, -cos_alpha, -cos_alpha*d],
             [sin_theta*cos_alpha, cos_theta*cos_alpha, -sin_alpha, -sin_alpha*d],
             [0, 0, 0, 0]
-        ]) * deg2rad
+        ])  * deg2rad
         
         # 对d的偏导数
         dA_dd = np.array([
@@ -112,8 +112,6 @@ class RokaeRobot:
             [0, 0, 0, 0],
             [0, 0, 0, 0]
         ])
-
-
 
         # 计算各参数贡献矩阵
         delta_theta_contrib = A_inv @ dA_dtheta
@@ -248,43 +246,38 @@ class RokaeRobot:
         
         for i in range(6):
             # 获取局部雅可比矩阵（Mi）
-            M_i,_,_,_,_ = self.build_local_jacobian(i, q_deg_array[i])
+            M_i, _, _, delta_d_contrib, _ = self.build_local_jacobian(i, q_deg_array[i])
             
-            # 计算伴随变换矩阵
-            Ad_T_0_i = self.adjoint_transform(transforms[i])
+            # 计算伴随变换矩阵: T_0_i
+            if i == 0:
+                theta_offset_0 = self.modified_dh_params[0][0]
+                alpha_0 = self.modified_dh_params[0][1]
+                d_0 = self.modified_dh_params[0][2]
+                a_0 = self.modified_dh_params[0][3]
+                actual_theta_0 = q_deg_array[0] + theta_offset_0
+                T_0_0 = self.modified_dh_matrix(actual_theta_0, alpha_0, d_0, a_0)
+                Ad_T_0_i = self.adjoint_transform(T_0_0)
             
-            # 计算贡献块（局部雅可比矩阵在基坐标系下的表示）
+            # 计算雅可比矩阵块: J_block_i = Ad_T_0_i * M_i
             J_block_i = Ad_T_0_i @ M_i
             
-            # 将贡献块填充到完整雅可比矩阵的对应位置
+            # 将计算结果放入整体雅可比矩阵的对应位置
             col_start = i * 4
             J_N[:, col_start:col_start+4] = J_block_i
-            
+        
         return J_N
-
+    
+    #! 保存雅可比矩阵到CSV文件
+    def save_jacobian_to_csv(self, J, filename="data/jacobian_matrix_analytical.csv"):
+        
+        np.savetxt(filename, J, delimiter=',', fmt='%.12f')
+        print(f"雅可比矩阵已保存到文件: {filename}")
 
 if __name__ == "__main__":
     robot = RokaeRobot()
-  
-    #* 向前运动学
-    q_deg_array = [42.91441824,-0.414388123,49.04196013,-119.3252973,78.65535552,-5.225972875]
-    T_total = robot.forward_kinematics(q_deg_array)
-    print(T_total)
-    print("--------------------------------")
-
-
-    #* 局部贡献矩阵
-    _,delta_theta_contrib,delta_alpha_contrib,delta_d_contrib,delta_a_contrib = robot.build_local_jacobian(2, q_deg_array[0])
-    print(f"delta_theta_contrib: {delta_theta_contrib}")
-    print("--------------------------------")
-    print(f"delta_alpha_contrib: {delta_alpha_contrib}")
-    print("--------------------------------")
-    print(f"delta_d_contrib: {delta_d_contrib}")
-    print("--------------------------------")   
-    print(f"delta_a_contrib: {delta_a_contrib}")
-    print("--------------------------------")
-
-
-    #* 构建雅可比矩阵
+    q_deg_array = np.array([42.91441824,-0.414388123,49.04196013,-119.3252973,78.65535552,-5.225972875])
     J_N = robot.build_jacobian_matrix(q_deg_array)
-    print(J_N)
+    robot.save_jacobian_to_csv(J_N)
+
+    fk_totle = robot.forward_kinematics(q_deg_array)
+    print(fk_totle)

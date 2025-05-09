@@ -81,7 +81,7 @@ class RokaeRobot:
         cos_alpha = math.cos(alpha_rad)
         sin_alpha = math.sin(alpha_rad)
         
-        # 对theta_deg的偏导数 
+        # 对theta_deg的偏导数 (#* 已经检查无错误)
         dA_dtheta = np.array([
             [-sin_theta, -cos_theta, 0, 0],
             [cos_theta*cos_alpha, -sin_theta*cos_alpha, 0, 0],
@@ -113,13 +113,20 @@ class RokaeRobot:
             [0, 0, 0, 0]
         ])
 
+
+
         # 计算各参数贡献矩阵
         delta_theta_contrib = A_inv @ dA_dtheta
         delta_alpha_contrib = A_inv @ dA_dalpha
         delta_d_contrib = A_inv @ dA_dd
         delta_a_contrib = A_inv @ dA_da
         
-        # 从每个贡献矩阵中提取位移和旋转元素
+        """
+            A_inv @ dA_dparam 的结果必然具有以下结构：
+            [[反对称矩阵 (3x3), 平移向量 (3x1)],
+            [ 零行向量 (1x3) , 零标量 (1x1) ]]
+            这是 se(3) 李代数元素的标准形式 [[R_δ, P_δ], [0, 0]]。
+        """
         # 位移部分 (dx, dy, dz)
         dx_theta = delta_theta_contrib[0, 3]
         dy_theta = delta_theta_contrib[1, 3]
@@ -149,7 +156,7 @@ class RokaeRobot:
         ry_a = delta_a_contrib[0, 2]
         rz_a = delta_a_contrib[1, 0]
         
-        # 构建雅可比矩阵 (6x4)，每列对应一个参数的贡献
+        # 构建局部雅可比矩阵 (6x4)，每列对应一个参数的贡献
         local_jacobian = np.array([
             [dx_theta, dx_alpha, dx_d, dx_a],  
             [dy_theta, dy_alpha, dy_d, dy_a],  
@@ -159,7 +166,7 @@ class RokaeRobot:
             [rz_theta, rz_alpha, rz_d, rz_a]   
         ])
         
-        return local_jacobian
+        return local_jacobian,delta_theta_contrib,delta_alpha_contrib,delta_d_contrib,delta_a_contrib
     
     #! 正运动学计算
     def forward_kinematics(self, q_deg_array):
@@ -241,7 +248,7 @@ class RokaeRobot:
         # 对于每个关节
         for i in range(6):
             # 获取局部雅可比矩阵（Mi）
-            M_i = self.build_local_jacobian(i, q_deg_array[i])
+            M_i,_,_,_,_ = self.build_local_jacobian(i, q_deg_array[i])
             
             # 计算伴随变换矩阵
             Ad_T_0_i = self.adjoint_transform(transforms[i])
@@ -255,34 +262,29 @@ class RokaeRobot:
             
         return J_N
 
+
 if __name__ == "__main__":
     robot = RokaeRobot()
-    
-    # 测试完整雅可比矩阵构建
-    # 定义一组关节角度（度）
-    test_angles = [0, 0, 0, 0, 0, 0]  # 零位姿态
-    
-    # 构建完整雅可比矩阵
-    J_N = robot.build_jacobian_matrix(test_angles)
-    
-    # 打印雅可比矩阵的形状和内容
-    print("完整雅可比矩阵 J_N 形状:", J_N.shape)
-    print("完整雅可比矩阵 J_N:")
+  
+    #* 向前运动学
+    q_deg_array = [42.91441824,-0.414388123,49.04196013,-119.3252973,78.65535552,-5.225972875]
+    T_total = robot.forward_kinematics(q_deg_array)
+    print(T_total)
+    print("--------------------------------")
+
+
+    #* 局部贡献矩阵
+    _,delta_theta_contrib,delta_alpha_contrib,delta_d_contrib,delta_a_contrib = robot.build_local_jacobian(2, q_deg_array[0])
+    print(f"delta_theta_contrib: {delta_theta_contrib}")
+    print("--------------------------------")
+    print(f"delta_alpha_contrib: {delta_alpha_contrib}")
+    print("--------------------------------")
+    print(f"delta_d_contrib: {delta_d_contrib}")
+    print("--------------------------------")   
+    print(f"delta_a_contrib: {delta_a_contrib}")
+    print("--------------------------------")
+
+
+    #* 构建雅可比矩阵
+    J_N = robot.build_jacobian_matrix(q_deg_array)
     print(J_N)
-    
-    # 测试雅可比矩阵的使用 - 模拟DH参数误差对末端位姿的影响
-    # 创建一个假定的DH参数误差向量 (24x1)
-    dq = np.zeros(24)
-    # 假设第1个关节的theta参数有1度误差
-    dq[0] = 1.0  
-    # 假设第3个关节的d参数有1mm误差
-    dq[10] = 1.0  
-    
-    # 计算这些误差导致的末端执行器位姿误差
-    dX = J_N @ dq
-    
-    print("\n参数误差向量 dq:")
-    print(dq)
-    print("\n导致的末端执行器位姿误差 dX:")
-    print(f"位移误差 (dx, dy, dz): [{dX[0]:.4f}, {dX[1]:.4f}, {dX[2]:.4f}] mm")
-    print(f"旋转误差 (rx, ry, rz): [{dX[3]:.4f}, {dX[4]:.4f}, {dX[5]:.4f}] rad")

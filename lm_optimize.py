@@ -11,6 +11,14 @@ JOINT_ANGLE_FILE = 'data/joint_angle.csv'
 LASER_POS_FILE = 'data/laser_pos.csv'
 ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
+#* 全局DH参数: theta_offset, alpha, d, a
+GLOBAL_DH_PARAMS = [0, 0, 380, 0,
+                    -90, -90, 0, 30,
+                    0, 0, 0, 440,
+                    0, -90, 435, 35,
+                    0, 90, 0, 0,
+                    180, -90, 83, 0]
+
 def compute_error_vector(dh_params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单个样本的误差向量"""
     # 转为张量并计算姿态差
@@ -35,15 +43,11 @@ def save_optimized_dh(dh_params, filepath='results/optimized_dh_parameters.csv')
     dirpath = os.path.dirname(filepath)
     if dirpath and not os.path.exists(dirpath):
         os.makedirs(dirpath)
-    
-    # 将一维数组重塑为6×4矩阵
     dh_matrix = np.array(dh_params).reshape(6, 4)
     
-    # 添加行列标签
+  
     header = "theta_offset,alpha,d,a"
     row_labels = [f"Joint_{i+1}" for i in range(6)]
-    
-    # 保存带标签的CSV
     with open(filepath, 'w') as f:
         f.write(f",{header}\n")  # 写入列标签
         for i, row in enumerate(dh_matrix):
@@ -51,17 +55,7 @@ def save_optimized_dh(dh_params, filepath='results/optimized_dh_parameters.csv')
     
     print(f"优化后的DH参数已保存到: {filepath}")
 
-def optimize_dh_parameters(initial_dh=None, max_iterations=50, lambda_init=0.01, tol=1e-8):
-
-    # 初始化DH参数
-    if initial_dh is None:
-        initial_dh = [0, 0, 380, 0, 
-                      -90, -90, 0, 30, 
-                      0, 0, 0, 440, 
-                      0, -90, 435, 35, 
-                      0, 90, 0, 0, 
-                      180, -90, 83, 0]
-    
+def optimize_dh_parameters(initial_dh=GLOBAL_DH_PARAMS, max_iterations=50, lambda_init=0.01, tol=1e-10):
     dh = torch.tensor(initial_dh, dtype=torch.float64, requires_grad=False)
     lambda_val = lambda_init
     
@@ -192,7 +186,7 @@ if __name__ == '__main__':
                  180, -90, 83, 0]
     
     # 优化DH参数
-    optimized_dh = optimize_dh_parameters(initial_dh, max_iterations=30, lambda_init=0.1)
+    optimized_dh = optimize_dh_parameters(initial_dh, max_iterations=50, lambda_init=0.1)
     
     # 保存优化结果
     save_optimized_dh(optimized_dh)

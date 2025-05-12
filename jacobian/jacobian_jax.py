@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-# JAX版DH变换矩阵，输入均为弧度/浮点
 
 def jnp_modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
     cos_theta = jnp.cos(theta_val_rad)
@@ -16,7 +15,7 @@ def jnp_modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
     ])
     return A
 
-# JAX版正运动学，输入：24维DH参数（度/长度），6维关节角度（度）
+
 def jnp_forward_kinematics_T_for_dh_sensitivity(all_dh_params_flat_jnp, q_deg_array_fixed):
     T_total_jnp = jnp.eye(4)
     num_joints = 6

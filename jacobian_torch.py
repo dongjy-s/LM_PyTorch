@@ -117,7 +117,7 @@ def extract_pose_from_T(T):
    
     # 计算sy和奇异性
     sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
-    singular = sy < 1e-6
+    singular = sy < 1e-8
 
     # 非奇异情况下计算
     x1 = torch.atan2(R[2,1], R[2,2])

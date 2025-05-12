@@ -2,7 +2,6 @@
 import os
 import numpy as np
 import torch
-import torch.autograd.functional as F
 from error_function import get_laser_tool_matrix
 from jacobian_torch import compute_error_vector_jacobian, forward_kinematics_T, extract_pose_from_T
 

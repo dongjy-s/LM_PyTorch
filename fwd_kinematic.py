@@ -91,7 +91,7 @@ class RokaeRobot:
     
     #! 四元数转旋转矩阵
     def quaternion_to_rotation_matrix(self, q):
-        # 四元数 q = [x, y, z, w]
+        
         x, y, z, w = q
         
         # 旋转矩阵公式
@@ -199,3 +199,7 @@ if __name__ == "__main__":
     print(f"工具位置 (x, y, z) in mm: [{tool_position[0]:.4f}, {tool_position[1]:.4f}, {tool_position[2]:.4f}]")
     print(f"工具姿态 (rx, ry, rz) in degrees: [{tool_euler_angles[0]:.4f}, {tool_euler_angles[1]:.4f}, {tool_euler_angles[2]:.4f}]")
     print(f"工具位姿变换矩阵:\n{tool_matrix}")
+    print("位置和欧拉角为:")
+    print(f"位置: {tool_position}")
+    print(f"欧拉角: {tool_euler_angles}")
+

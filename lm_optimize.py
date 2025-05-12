@@ -3,26 +3,24 @@ import os
 import numpy as np
 import torch
 import torch.autograd.functional as F
-from jacobian.jacobian_pytorch import forward_kinematics_T, extract_pose_from_T
 from error_function import get_laser_tool_matrix
-from jacobian_torch import compute_error_vector_jacobian
+from jacobian_torch import compute_error_vector_jacobian, forward_kinematics_T, extract_pose_from_T
 
 # 常量定义
 JOINT_ANGLE_FILE = 'data/joint_angle.csv'
 LASER_POS_FILE = 'data/laser_pos.csv'
 ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
-def compute_error_vector(dh_params, joint_angle, laser_matrix, weights=ERROR_WEIGHTS):
+def compute_error_vector(dh_params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单个样本的误差向量"""
-    dh_torch = torch.tensor(dh_params, dtype=torch.float64)
-    q_torch = torch.tensor(joint_angle, dtype=torch.float64)
-    T_laser_torch = torch.tensor(laser_matrix, dtype=torch.float64)
-    weights_torch = torch.tensor(weights, dtype=torch.float64)
-    
-    T_pred = forward_kinematics_T(dh_torch, q_torch)
+    # 转为张量并计算姿态差
+    q_t = torch.as_tensor(joint_angles, dtype=torch.float64)
+    dh_t = torch.as_tensor(dh_params, dtype=torch.float64)
+    T_pred = forward_kinematics_T(q_t, dh_t)
     pose_pred = extract_pose_from_T(T_pred)
-    pose_laser = extract_pose_from_T(T_laser_torch)
-    return (pose_pred - pose_laser) * weights_torch
+    T_laser = torch.as_tensor(laser_matrix, dtype=torch.float64)
+    pose_laser = extract_pose_from_T(T_laser)
+    return (pose_pred - pose_laser) * torch.as_tensor(weights, dtype=torch.float64)
 
 def compute_total_error(dh_params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
     """计算所有样本的总误差（2-范数）"""
@@ -53,7 +51,7 @@ def save_optimized_dh(dh_params, filepath='results/optimized_dh_parameters.csv')
     
     print(f"优化后的DH参数已保存到: {filepath}")
 
-def optimize_dh_parameters(initial_dh=None, max_iterations=50, lambda_init=0.01, tol=1e-6):
+def optimize_dh_parameters(initial_dh=None, max_iterations=50, lambda_init=0.01, tol=1e-8):
 
     # 初始化DH参数
     if initial_dh is None:
@@ -142,9 +140,8 @@ def optimize_dh_parameters(initial_dh=None, max_iterations=50, lambda_init=0.01,
         
         if not update_success:
             print("内部迭代未收敛，继续主循环")
-                    
-        # 检查收敛
-        if torch.norm(delta) < tol:
+        # 检查收敛，仅在成功更新(delta已定义)时进行
+        if update_success and torch.norm(delta) < tol:
             print(f"参数变化小于阈值 {tol}，在第 {iteration+1} 次迭代后收敛")
             break
     

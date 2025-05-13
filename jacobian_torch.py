@@ -2,22 +2,23 @@ import os
 import numpy as np
 import torch
 import torch.autograd.functional as F
-from error_function import get_laser_tool_matrix
+from scipy.spatial.transform import Rotation
+import pandas as pd
 
-#* 常量定义
+#! 常量定义
 JOINT_ANGLE_FILE = 'data/joint_angle.csv'
 LASER_POS_FILE = 'data/laser_pos.csv'
 ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
-#* 全局DH参数: theta_offset, alpha, d, a
-GLOBAL_DH_PARAMS = [0, 0, 380, 0,
+#! 待优化的DH参数: theta_offset, alpha, d, a 单位:mm,度
+INIT_DH_PARAMS = [0, 0, 380, 0,
                     -90, -90, 0, 30,
                     0, 0, 0, 440,
                     0, -90, 435, 35,
                     0, 90, 0, 0,
                     180, -90, 83, 0]
 
-#* 添加关节限位(度)
+#! 关节限位(度)
 JOINT_LIMITS = np.array([
     [-170, 170],
     [-96, 130],
@@ -27,15 +28,43 @@ JOINT_LIMITS = np.array([
     [-180, 180]
 ])
 
+#! 初始TCP参数
+INIT_TOOL_OFFSET_POSITION = np.array([1,1,100])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
-#! MDH变换矩阵公式,角度单位为弧度，长度单位为毫米
+#! 激光跟踪仪工具位姿变换矩阵
+def get_laser_tool_matrix():
+    laser_data = pd.read_csv(LASER_POS_FILE, delimiter=',', skiprows=1, header=None).values
+    num_samples = laser_data.shape[0]
+    laser_tool_matrix = np.zeros((num_samples, 4, 4))
+    
+    for i, data in enumerate(laser_data):
+        x, y, z, rx, ry, rz = data
+        
+        # 计算旋转矩阵
+        R = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
+        
+        # 创建变换矩阵
+        T = np.eye(4)
+        T[0:3, 0:3] = R
+        T[0:3, 3] = [x, y, z]
+        
+        laser_tool_matrix[i] = T
+    return laser_tool_matrix
+#! 构建MDH变换矩阵
 def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
+    """
+        MDH变换矩阵公式:
+            [cos_theta, -sin_theta, 0, a],
+            [sin_theta*cos_alpha, cos_theta*cos_alpha, -sin_alpha, -sin_alpha*d],
+            [sin_theta*sin_alpha, cos_theta*sin_alpha, cos_alpha, cos_alpha*d],
+            [0, 0, 0, 1]
+    """
     cos_theta = torch.cos(theta_val_rad)
     sin_theta = torch.sin(theta_val_rad)
     cos_alpha = torch.cos(alpha_val_rad)
     sin_alpha = torch.sin(alpha_val_rad)
     
-    # 使用PyTorch创建矩阵
     MDH_matrix = torch.zeros(4, 4, dtype=torch.float64)
     MDH_matrix[0, 0] = cos_theta
     MDH_matrix[0, 1] = -sin_theta
@@ -60,6 +89,15 @@ def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
 
 #! 四元数转旋转矩阵
 def quaternion_to_rotation_matrix(q):
+    """
+        四元数和旋转矩阵变换公式：
+            q = [x, y, z, w]
+            R = [
+                [1 - 2*y*y - 2*z*z, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
+                [2*x*y + 2*w*z, 1 - 2*x*x - 2*z*z, 2*y*z - 2*w*x],
+                [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x*x - 2*y*y]
+            ]
+    """
     x, y, z, w = q
     R = torch.zeros(3, 3, dtype=torch.float64)
     R[0, 0] = 1 - 2*y*y - 2*z*z
@@ -73,22 +111,14 @@ def quaternion_to_rotation_matrix(q):
     R[2, 2] = 1 - 2*x*x - 2*y*y
     return R
 
-#! 正向运动学，计算基座到工具的变换矩阵，并检查关节限位
+#! 正向运动学（PyTorch前向传播）
 def forward_kinematics_T(q_deg_array, params_torch):
     """
-    计算基座到工具的变换矩阵。
-
-    参数:
-    q_deg_array (torch.Tensor): 6个关节的角度 (度).
-    params_torch (torch.Tensor): 包含31个参数的张量:
-                                 - 前24个是DH参数 (theta_offset, alpha, d, a for 6 joints)
-                                 - 后7个是TCP参数 (3位置 + 4四元数)
-    返回:
-    torch.Tensor: 基座到工具的4x4变换矩阵.
+        正向运动学公式：
+            T_base_tool = T_totle @ A_i
     """
+    #* 从总参数中提取DH参数和TCP参数
     q_deg_array = torch.as_tensor(q_deg_array, dtype=torch.float64)
-
-    # 解析参数
     dh_params = params_torch[0:24]
     tool_offset_position = params_torch[24:27]
     tool_offset_quaternion = params_torch[27:31]
@@ -162,19 +192,17 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/jacobian_error_jacob
     np.savetxt(filepath, jacobian_np, delimiter=',', fmt='%.12f')
     print(f"雅可比矩阵已保存到: {filepath}")
 
-# #! 计算误差范数对 DH 参数的雅可比
-# def compute_error_jacobian(dh_params=GLOBAL_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
+# #! 计算误差范数对 DH 参数的雅可比（LM用不到）
+# def compute_error_jacobian(dh_params=INIT_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
 #     joint_angles = np.loadtxt(joint_angle_file, delimiter=',', skiprows=1)[index]
 #     T_laser_np = get_laser_tool_matrix()[index]
-#     #* 转为 torch 张量
+#     # 转为 torch 张量
 #     # dh_torch = torch.tensor(dh_params, dtype=torch.float64, requires_grad=True) # 旧的，仅DH
-#     #* 应该使用组合参数，但此函数现在有点冗余，主要关注 _vector_jacobian
-#     #* 这里暂时跳过修改，因为核心在 compute_error_vector_jacobian
 #     q_torch = torch.tensor(joint_angles, dtype=torch.float64)
 #     T_laser_torch = torch.tensor(T_laser_np, dtype=torch.float64)
 #     weights_torch = torch.tensor(weights, dtype=torch.float64)
 
-#     #* 定义误差范数函数
+#     #定义误差范数函数
 #     def err_norm_fn(params_tensor): # 需要接收组合参数
 #         T_pred = forward_kinematics_T(q_torch, params_tensor)
 #         pose_pred = extract_pose_from_T(T_pred)
@@ -184,7 +212,6 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/jacobian_error_jacob
 
 #     # 计算雅可比
 #     # J_err = F.jacobian(err_norm_fn, dh_torch) # 旧的
-#     #* 需要用组合参数张量来计算，暂时注释掉此函数的实现
 #     print("compute_error_jacobian function needs update for combined parameters")
 #     J_err = torch.zeros(24) # Placeholder
 #     print(J_err)
@@ -193,41 +220,30 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/jacobian_error_jacob
 #! 计算误差向量对 组合参数 的雅可比
 def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单帧数据的误差向量对 组合参数 (DH+TCP) 的雅可比矩阵"""
-    # 转为 torch 张量
+    #* 转为 torch 张量
     params_torch = torch.tensor(params, dtype=torch.float64, requires_grad=True) # 组合参数
     q_torch = torch.as_tensor(joint_angles, dtype=torch.float64)
     T_laser_torch = torch.as_tensor(laser_matrix, dtype=torch.float64)
     weights_torch = torch.as_tensor(weights, dtype=torch.float64)
 
-    # 定义误差向量函数
-    def err_vec_fn(params_tensor): # 接收组合参数张量
-        T_pred = forward_kinematics_T(q_torch, params_tensor) # 使用更新后的正解函数
+    #* 定义误差向量函数
+    def err_vec_fn(params_tensor):
+        T_pred = forward_kinematics_T(q_torch, params_tensor) 
         pose_pred = extract_pose_from_T(T_pred)
         pose_laser = extract_pose_from_T(T_laser_torch)
         return (pose_pred - pose_laser) * weights_torch
 
-    # 计算并返回雅可比矩阵 (维度应为 6x31)
+    #* 计算并返回雅可比矩阵 (维度应为 6x31)
     J = F.jacobian(err_vec_fn, params_torch) # 针对组合参数计算
     return J
 
 if __name__ == '__main__':
-    # 定义初始 TCP 参数 (之前是全局常量)
-    initial_tool_offset_position = np.array([1,1,97])
-    initial_tool_offset_quaternion = np.array([0.5003, 0.5012, 0.5002, 0.4983])
-
     # 合并初始 DH 参数和初始 TCP 参数
-    initial_params = np.concatenate((GLOBAL_DH_PARAMS, initial_tool_offset_position, initial_tool_offset_quaternion))
+    initial_params = np.concatenate((INIT_DH_PARAMS, INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
 
     # 加载数据
     joint_angles_data = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices_data = get_laser_tool_matrix()
-    frame_index = 0 # 选择要计算的帧
-
-    # 计算并保存雅可比矩阵
-    jacobian_result = compute_error_vector_jacobian(
-        params=initial_params, 
-        joint_angles=joint_angles_data[frame_index],
-        laser_matrix=laser_matrices_data[frame_index],
-        weights=ERROR_WEIGHTS
-    )
-    save_jacobian_to_csv(jacobian_result)
+    joint_index = 0 # 选择要计算的关节
+   
+    

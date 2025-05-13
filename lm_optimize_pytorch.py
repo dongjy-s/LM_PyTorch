@@ -2,9 +2,8 @@
 import os
 import numpy as np
 import torch
-import random
-from error_function import get_laser_tool_matrix
-from jacobian_torch import compute_error_vector_jacobian, forward_kinematics_T, extract_pose_from_T
+from jacobian_torch import compute_error_vector_jacobian, forward_kinematics_T, extract_pose_from_T, get_laser_tool_matrix
+
 
 # 常量定义
 JOINT_ANGLE_FILE = 'data/joint_angle.csv'
@@ -25,8 +24,13 @@ ALL_INDICES = list(range(len(GLOBAL_DH_PARAMS)))
 OPT_INDICES = [i for i in ALL_INDICES if i not in [0,1,2,3,5,9,13,17,20,21,22,23]]  
 
 #* 添加TCP参数的初始值 (来自 jacobian_torch.py)
-INITIAL_TCP_POSITION = np.array([1, 1, 97])
+INITIAL_TCP_POSITION = np.array([2, 2, 100])
 INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
+
+# 直接指定固定参数索引 (DH部分)
+DH_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23]
+# 是否优化TCP参数
+OPTIMIZE_TCP = True # 可以设置为 False 来仅优化DH
 
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单个样本的误差向量"""
@@ -63,7 +67,7 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
     header_dh = "theta_offset,alpha,d,a"
     row_labels_dh = [f"Joint_{i+1}" for i in range(6)]
     with open(dh_filepath, 'w') as f:
-        f.write(f",{header_dh}\n")  # 写入列标签
+        f.write(f",{header_dh}\n")  
         for i, row in enumerate(dh_matrix):
             f.write(f"{row_labels_dh[i]},{','.join(f'{val:.6f}' for val in row)}\n")
     print(f"优化后的DH参数已保存到: {dh_filepath}")
@@ -220,10 +224,6 @@ def evaluate_optimization(initial_params, optimized_params):
     print(f"{'总体平均':^8}|{avg_initial_error:^15.6f}|{avg_optimized_error:^15.6f}|{avg_improvement:^10.2f}%")
     print("="*50)
 
-# 直接指定固定参数索引 (DH部分)
-DH_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23]
-# 是否优化TCP参数
-OPTIMIZE_TCP = True # 可以设置为 False 来仅优化DH
 
 if __name__ == '__main__':
     # 定义初始DH参数 和 TCP参数

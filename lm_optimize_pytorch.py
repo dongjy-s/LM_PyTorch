@@ -6,25 +6,19 @@ from jacobian_torch import (
     forward_kinematics_T, 
     extract_pose_from_T, 
     get_laser_tool_matrix,
-    ERROR_WEIGHTS
+    ERROR_WEIGHTS,
+    quaternion_to_rotation_matrix,
+    INIT_T_LASER_BASE_PARAMS,
+    INIT_DH_PARAMS,
+    JOINT_ANGLE_FILE,
+    LASER_POS_FILE,
+    INIT_TOOL_OFFSET_POSITION,
+    INIT_TOOL_OFFSET_QUATERNION
 )
 
-#* 数据的路径
-JOINT_ANGLE_FILE = 'data/joint_angle.csv'
-LASER_POS_FILE = 'data/laser_pos.csv'
 
 
-#* 初始DH参数: theta_offset, alpha, d, a
-GLOBAL_DH_PARAMS = [0, 0, 380, 0,
-                    -90, -90, 0, 30,
-                    0, 0, 0, 440,
-                    0, -90, 435, 35,
-                    0, 90, 0, 0,
-                    180, -90, 83, 0]
 
-#* 添加TCP参数的初始值 (来自 jacobian_torch.py)
-INITIAL_TCP_POSITION = np.array([2, 2, 100])
-INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
 #* 固定参数索引
 ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23] 
@@ -36,16 +30,32 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     q_t = torch.as_tensor(joint_angles, dtype=torch.float64)
     params_t = torch.as_tensor(params, dtype=torch.float64) 
 
-    #* 计算预测位姿
-    T_pred = forward_kinematics_T(q_t, params_t) 
-    pose_pred = extract_pose_from_T(T_pred)
+    #* 提取参数
+    params_for_fk = params_t[0:31] # DH (24) + TCP (3+4)
+    t_laser_base_pos = params_t[31:34]
+    t_laser_base_quat = params_t[34:38]
 
-    #* 获取激光跟踪仪位姿
+    #* 计算预测位姿（机器人基座坐标系下）
+    T_pred_robot_base = forward_kinematics_T(q_t, params_for_fk) 
+
+    #* 构建T_laser_base变换矩阵（基座在激光坐标系下的位姿）
+    R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat)
+    T_laser_base_matrix = torch.eye(4, dtype=torch.float64)
+    T_laser_base_matrix[0:3, 0:3] = R_laser_base
+    T_laser_base_matrix[0:3, 3] = t_laser_base_pos
+    
+    #* 将机器人预测位姿转换到激光跟踪仪坐标系
+    T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
+    
+    #* 从变换矩阵提取位姿向量
+    pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_frame)
+    
+    #* 获取激光跟踪仪位姿（已经在激光坐标系下）
     T_laser = torch.as_tensor(laser_matrix, dtype=torch.float64)
     pose_laser = extract_pose_from_T(T_laser)
     
     #* 计算误差向量
-    return (pose_pred - pose_laser) * torch.as_tensor(weights, dtype=torch.float64)
+    return (pose_pred_in_laser - pose_laser) * torch.as_tensor(weights, dtype=torch.float64)
 
 
 #! 计算所有样本的总误差（2-范数）
@@ -64,6 +74,9 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
 
     dh_params = params[0:24]
     tcp_params = params[24:31]
+    t_laser_base_params = params[31:38]
+    
+    # 保存DH参数
     dh_filepath = f"{filepath_prefix}_dh_parameters.csv"
     dh_matrix = np.array(dh_params).reshape(6, 4)
     header_dh = "theta_offset,alpha,d,a"
@@ -74,6 +87,7 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
             f.write(f"{row_labels_dh[i]},{','.join(f'{val:.6f}' for val in row)}\n")
     print(f"优化后的DH参数已保存到: {dh_filepath}")
     
+    # 保存TCP参数
     tcp_filepath = f"{filepath_prefix}_tcp_parameters.csv"
     header_tcp = "parameter,value"
     tcp_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
@@ -82,6 +96,16 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
         for name, value in zip(tcp_param_names, tcp_params):
             f.write(f"{name},{value:.6f}\n")
     print(f"优化后的TCP参数已保存到: {tcp_filepath}")
+    
+    # 保存激光跟踪仪-基座变换参数
+    t_laser_base_filepath = f"{filepath_prefix}_t_laser_base_parameters.csv"
+    header_t_laser_base = "parameter,value"
+    t_laser_base_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+    with open(t_laser_base_filepath, 'w') as f:
+        f.write(f"{header_t_laser_base}\n")
+        for name, value in zip(t_laser_base_param_names, t_laser_base_params):
+            f.write(f"{name},{value:.6f}\n")
+    print(f"优化后的激光跟踪仪-基座变换参数已保存到: {t_laser_base_filepath}")
 
 
 #! LM优化
@@ -119,7 +143,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             all_jacobians.append(jacobian)
         error_vector = torch.cat(all_errors)
 
-        #* 将所有雅可比矩阵堆叠成一个矩阵（N*6 x 31）
+        #* 将所有雅可比矩阵堆叠成一个矩阵（N*6 x 38）
         J = torch.vstack(all_jacobians)
 
         #* LM算法公式：(J^T J + λ * diag(J^T J)) * Δθ = -J^T e
@@ -142,8 +166,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 print(f"矩阵求解错误，增大阻尼因子 λ = {lambda_val} -> {lambda_val * 10}")
                 lambda_val *= 10
                 # 如果阻尼因子过大，提前结束优化
-                if lambda_val > 1e5:
-                    print(f"阻尼因子超过阈值 1e5，提前结束优化")
+                if lambda_val > 1e8:
+                    print(f"阻尼因子超过阈值 1e8，提前结束优化")
                     return params.numpy()
                 continue
                 
@@ -161,8 +185,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
-                #* 四元数归一化 (如果TCP被优化)
-                if any(idx in opt_indices for idx in range(24, 31)):
+                #* TCP四元数归一化 (如果TCP被优化)
+                if any(idx in opt_indices for idx in range(27, 31)):
                     q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)
                     if norm_q_tcp > 1e-9: 
@@ -170,6 +194,16 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                     else:
                         params[27:31] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: TCP四元数模长接近于零，已重置为[0,0,0,1]")
+                
+                #* 激光跟踪仪-基座四元数归一化 (如果被优化)
+                if any(idx in opt_indices for idx in range(34, 38)):
+                    q_laser_base = params[34:38]
+                    norm_q_laser_base = torch.linalg.norm(q_laser_base)
+                    if norm_q_laser_base > 1e-9:
+                        params[34:38] = q_laser_base / norm_q_laser_base
+                    else:
+                        params[34:38] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
+                        print("警告: 激光跟踪仪-基座四元数模长接近于零，已重置为[0,0,0,1]")
 
                 print(f"迭代 {iteration+1}, 误差: {current_error.item():.6f}, λ = {lambda_val:.6e}")
             else:
@@ -232,12 +266,13 @@ def evaluate_optimization(initial_params, optimized_params):
 
 
 if __name__ == '__main__':
-    # 定义初始DH参数 和 TCP参数
-    initial_dh_params = np.array(GLOBAL_DH_PARAMS)
-    initial_tcp_params = np.concatenate((INITIAL_TCP_POSITION, INITIAL_TCP_QUATERNION))
-    initial_params = np.concatenate((initial_dh_params, initial_tcp_params)) 
+    # 定义初始DH参数 和 TCP参数 和 激光跟踪仪-基座变换参数
+    initial_dh_params = np.array(INIT_DH_PARAMS)
+    initial_tcp_params = np.concatenate((INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
+    initial_params = np.concatenate((initial_dh_params, initial_tcp_params, INIT_T_LASER_BASE_PARAMS)) 
 
-    opt_indices = [i for i in range(31) if i not in ALL_FIXED_INDICES]
+    # 排除固定参数
+    opt_indices = [i for i in range(38) if i not in ALL_FIXED_INDICES]
     print(f"固定参数索引 ({len(ALL_FIXED_INDICES)}): {ALL_FIXED_INDICES}")
     print(f"可优化参数索引 ({len(opt_indices)}): {opt_indices}")
     
@@ -283,5 +318,18 @@ if __name__ == '__main__':
         tcp_diff = opt_tcp_params[k] - init_tcp_params[k]
         status = "已优化" if tcp_idx in opt_indices else "已固定"
         print(f"{'-':^6}|{tcp_param_names[k]:^12}|{init_tcp_params[k]:^15.4f}|{opt_tcp_params[k]:^15.4f}|{tcp_diff:^15.4f}|{status:^10}")
+
+    # 添加激光跟踪仪-基座变换参数对比
+    print("="*70)
+    print(" "*25 + "激光跟踪仪-基座变换参数对比")
+    print("="*70)
+    t_laser_base_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+    init_t_laser_base_params = initial_params[31:38]
+    opt_t_laser_base_params = optimized_params[31:38]
+    for k in range(7):
+        t_laser_base_idx = 31 + k
+        t_laser_base_diff = opt_t_laser_base_params[k] - init_t_laser_base_params[k]
+        status = "已优化" if t_laser_base_idx in opt_indices else "已固定"
+        print(f"{'-':^6}|{t_laser_base_param_names[k]:^12}|{init_t_laser_base_params[k]:^15.4f}|{opt_t_laser_base_params[k]:^15.4f}|{t_laser_base_diff:^15.4f}|{status:^10}")
 
     print("="*70)

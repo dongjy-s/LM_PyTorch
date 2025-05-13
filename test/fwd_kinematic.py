@@ -12,28 +12,28 @@ class RokaeRobot:
     def __init__(self):
         # 关节限位 [min, max] (单位:度)
         self.joint_limits = [
-            [-170, 170], 
-            [-96, 130],   
-            [-195, 65],   
-            [-179, 170],  
-            [-95, 95],    
-            [-180, 180]   
+                [-100, 100],
+                [-90, 100],
+                [-100, 600],
+                [-100, 100],
+                [-90, 90],
+                [-120, 120]  
         ]
         
         #! MDH: theta_offset, alpha, d, a
         self.modified_dh_params = [
-            [0, 0, 380, 0],
-            [-90, -90, 0, 30],
-            [0, 0, 0, 440],
-            [0, -90, 435, 35],
+            [0, 0, 487, 0],
+            [-90, -90, 0, 85],
+            [0, 0, 0, 640],
+            [0, -90, 720, 205],
             [0, 90, 0, 0],
-            [180, -90, 83, 0]
+            [180, -90, 75, 0]
         ]
         
         # 工具相对于末端法兰的位姿 (位置[X,Y,Z]和四元数[Rx,Ry,Rz,W])
         self.tool_offset = {
-            'position': np.array([1.081, 1.1316, 97.2485]),  # mm
-            'quaternion': np.array([0.5003, 0.5012, 0.5002, 0.4983])  # Rx, Ry, Rz, W
+            'position': np.array([0.1731, 1.1801, 238.3535]),  # mm
+            'quaternion': np.array([0.4961, 0.5031, 0.505, 0.4957])  # Rx, Ry, Rz, W
         }
         
         # 设置打印精度，抑制科学计数法
@@ -186,11 +186,75 @@ class RokaeRobot:
             'euler_angles': tool_euler_angles  
         }
 
+    #! 计算齐次变换矩阵的逆
+    def inverse_homogeneous_transform(self, T):
+        """
+        计算4x4齐次变换矩阵的逆。
+        T = [[R, p], [0, 1]] => T_inv = [[R.T, -R.T * p], [0, 1]]
+        """
+        R = T[0:3, 0:3]
+        p = T[0:3, 3]
+        R_inv = R.T
+        p_inv = -np.dot(R_inv, p)
+        
+        T_inv = np.identity(4)
+        T_inv[0:3, 0:3] = R_inv
+        T_inv[0:3, 3] = p_inv
+        return T_inv
+
+    #! 计算工具在激光跟踪仪坐标系下的位姿
+    def calculate_tool_pose_in_tracker_frame(self, q_deg, base_pose_in_tracker_xyz_quat):
+        """
+        计算工具在激光跟踪仪坐标系下的位姿。
+        参数:
+            q_deg: 机器人关节角度 (度)
+            base_pose_in_tracker_xyz_quat: 基座相对于激光跟踪仪的位姿 [x, y, z, qx, qy, qz, qw]
+                                        其中 x,y,z 单位为 mm, 四元数为 [qx, qy, qz, qw]
+        返回:
+            包含位姿信息的字典
+        """
+        # 1. 计算工具相对于基座的变换矩阵 T_base_tool
+        tool_result_base = self.calculate_tool_matrix(q_deg)
+        if not tool_result_base['valid']:
+            return tool_result_base # 如果无效，直接返回错误信息
+        T_base_tool = tool_result_base['transform_matrix']
+
+        # 2. 构建基座在激光跟踪仪坐标系下的变换矩阵 T_tracker_base
+        #    因为输入直接是 T_tracker_base 的参数
+        base_pos_in_tracker_mm = np.array(base_pose_in_tracker_xyz_quat[0:3])
+        # 四元数顺序: qx, qy, qz, qw. quaternion_to_rotation_matrix 期望 x, y, z, w
+        base_quat_in_tracker_xyzw = np.array([base_pose_in_tracker_xyz_quat[3],  # qx -> x
+                                              base_pose_in_tracker_xyz_quat[4],  # qy -> y
+                                              base_pose_in_tracker_xyz_quat[5],  # qz -> z
+                                              base_pose_in_tracker_xyz_quat[6]]) # qw -> w
+        
+        R_tracker_base = self.quaternion_to_rotation_matrix(base_quat_in_tracker_xyzw)
+        
+        T_tracker_base = np.identity(4)
+        T_tracker_base[0:3, 0:3] = R_tracker_base
+        T_tracker_base[0:3, 3] = base_pos_in_tracker_mm
+
+        # 3. 计算工具在激光跟踪仪坐标系下的变换矩阵: T_tracker_tool = T_tracker_base * T_base_tool
+        T_tracker_tool = np.dot(T_tracker_base, T_base_tool)
+
+        # 4. 从 T_tracker_tool 中提取位置和欧拉角
+        position_in_tracker = T_tracker_tool[0:3, 3]
+        rotation_matrix_in_tracker = T_tracker_tool[0:3, 0:3]
+        euler_angles_in_tracker = self.rotation_matrix_to_euler(rotation_matrix_in_tracker)
+        
+        return {
+            'valid': True,
+            'error_msg': '',
+            'transform_matrix_in_tracker': T_tracker_tool,
+            'position_in_tracker': position_in_tracker,      # [x, y, z] in tracker frame (mm)
+            'euler_angles_in_tracker': euler_angles_in_tracker # [rx, ry, rz] in tracker frame (degrees)
+        }
+
 
 if __name__ == "__main__":
 
     robot = RokaeRobot()  
-    q_deg = [42.91441824,-0.414388123,49.04196013,-119.3252973,78.65535552,-5.225972875]  
+    q_deg = [2.636115843805,29.5175455057437,6.10038158777613,34.7483282137072,-47.3762053517954,35.7916251381285]  
     T_base_tool = robot.calculate_tool_matrix(q_deg)
     
     tool_position = T_base_tool['position']
@@ -202,4 +266,25 @@ if __name__ == "__main__":
     print("位置和欧拉角为:")
     print(f"位置: {tool_position}")
     print(f"欧拉角: {tool_euler_angles}")
+
+    print("\n" + "="*30 + "\n") # 分隔符
+
+    # 定义基座相对于激光跟踪仪的位姿 [x, y, z, qx, qy, qz, qw]
+    # x,y,z 单位 mm; qx,qy,qz,qw 为四元数分量
+    base_pose_in_tracker = [3610.8319, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166]
+    
+    # 计算工具在激光跟踪仪坐标系下的位姿
+    tool_pose_in_tracker_result = robot.calculate_tool_pose_in_tracker_frame(q_deg, base_pose_in_tracker)
+
+    if tool_pose_in_tracker_result['valid']:
+        pos_in_tracker = tool_pose_in_tracker_result['position_in_tracker']
+        euler_in_tracker = tool_pose_in_tracker_result['euler_angles_in_tracker']
+        matrix_in_tracker = tool_pose_in_tracker_result['transform_matrix_in_tracker']
+        
+        print("工具在激光跟踪仪坐标系下的位姿:")
+        print(f"  位置 (x, y, z) in mm: [{pos_in_tracker[0]:.4f}, {pos_in_tracker[1]:.4f}, {pos_in_tracker[2]:.4f}]")
+        print(f"  姿态 (rx, ry, rz) in degrees: [{euler_in_tracker[0]:.4f}, {euler_in_tracker[1]:.4f}, {euler_in_tracker[2]:.4f}]")
+        print(f"  变换矩阵:\\n{matrix_in_tracker}")
+    else:
+        print(f"计算工具在激光跟踪仪坐标系下的位姿失败: {tool_pose_in_tracker_result['error_msg']}")
 

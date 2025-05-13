@@ -26,15 +26,8 @@ GLOBAL_DH_PARAMS = [0, 0, 380, 0,
 INITIAL_TCP_POSITION = np.array([2, 2, 100])
 INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
-#* 全部参数索引
-ALL_INDICES = list(range(len(GLOBAL_DH_PARAMS)))
-#* 直接指定固定参数索引
-OPT_INDICES = [i for i in ALL_INDICES if i not in [0,1,2,3,5,9,13,17,20,21,22,23]]  
-
-#* 直接指定固定参数索引 (DH部分)
-DH_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23]
-#* 是否优化TCP参数
-OPTIMIZE_TCP = True 
+#* 固定参数索引
+ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23] 
 
 
 #! 计算单组数据的误差向量
@@ -242,19 +235,14 @@ if __name__ == '__main__':
     # 定义初始DH参数 和 TCP参数
     initial_dh_params = np.array(GLOBAL_DH_PARAMS)
     initial_tcp_params = np.concatenate((INITIAL_TCP_POSITION, INITIAL_TCP_QUATERNION))
-    initial_params = np.concatenate((initial_dh_params, initial_tcp_params)) # Create initial combined params
-    
-    # 确定优化索引
-    dh_opt_indices = [i for i in range(24) if i not in DH_FIXED_INDICES]
-    tcp_opt_indices = list(range(24, 31)) if OPTIMIZE_TCP else []
-    opt_indices = dh_opt_indices + tcp_opt_indices
-    
-    fixed_indices = [i for i in range(31) if i not in opt_indices] # Calculate fixed indices
-    print(f"固定参数索引 ({len(fixed_indices)}): {fixed_indices}")
+    initial_params = np.concatenate((initial_dh_params, initial_tcp_params)) 
+
+    opt_indices = [i for i in range(31) if i not in ALL_FIXED_INDICES]
+    print(f"固定参数索引 ({len(ALL_FIXED_INDICES)}): {ALL_FIXED_INDICES}")
     print(f"可优化参数索引 ({len(opt_indices)}): {opt_indices}")
     
     # 优化参数
-    optimized_params = optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.1, opt_indices=opt_indices) # Pass combined params
+    optimized_params = optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.1, opt_indices=opt_indices) 
     
     # 保存优化结果
     save_optimization_results(optimized_params) 

@@ -41,16 +41,17 @@ def get_laser_tool_matrix():
     for i, data in enumerate(laser_data):
         x, y, z, rx, ry, rz = data
         
-        # 计算旋转矩阵
+        #* 计算旋转矩阵（xyz内旋）
         R = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
         
-        # 创建变换矩阵
+        #* 创建变换矩阵
         T = np.eye(4)
         T[0:3, 0:3] = R
         T[0:3, 3] = [x, y, z]
         
         laser_tool_matrix[i] = T
     return laser_tool_matrix
+
 #! 构建MDH变换矩阵
 def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
     """
@@ -184,7 +185,7 @@ def extract_pose_from_T(T):
     return torch.cat([position, euler_angles_torch])
 
 # 保存雅可比矩阵到 CSV
-def save_jacobian_to_csv(jacobian_tensor, filepath='results/jacobian_error_jacobian.csv'):
+def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv'):
     jacobian_np = jacobian_tensor.detach().numpy()
     dirpath = os.path.dirname(filepath)
     if dirpath and not os.path.exists(dirpath):
@@ -192,41 +193,40 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/jacobian_error_jacob
     np.savetxt(filepath, jacobian_np, delimiter=',', fmt='%.12f')
     print(f"雅可比矩阵已保存到: {filepath}")
 
-# #! 计算误差范数对 DH 参数的雅可比（LM用不到）
-# def compute_error_jacobian(dh_params=INIT_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
-#     joint_angles = np.loadtxt(joint_angle_file, delimiter=',', skiprows=1)[index]
-#     T_laser_np = get_laser_tool_matrix()[index]
-#     # 转为 torch 张量
-#     # dh_torch = torch.tensor(dh_params, dtype=torch.float64, requires_grad=True) # 旧的，仅DH
-#     q_torch = torch.tensor(joint_angles, dtype=torch.float64)
-#     T_laser_torch = torch.tensor(T_laser_np, dtype=torch.float64)
-#     weights_torch = torch.tensor(weights, dtype=torch.float64)
+ #! 计算误差范数对 DH 参数的雅可比(冗余)
+#// def compute_error_jacobian(dh_params=INIT_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
+#//     joint_angles = np.loadtxt(joint_angle_file, delimiter=',', skiprows=1)[index]
+#//   T_laser_np = get_laser_tool_matrix()[index]
+#//     # 转为 torch 张量
+#//     # dh_torch = torch.tensor(dh_params, dtype=torch.float64, requires_grad=True) # 旧的，仅DH
+#//     q_torch = torch.tensor(joint_angles, dtype=torch.float64)
+#//     T_laser_torch = torch.tensor(T_laser_np, dtype=torch.float64)
+#//     weights_torch = torch.tensor(weights, dtype=torch.float64)
 
-#     #定义误差范数函数
-#     def err_norm_fn(params_tensor): # 需要接收组合参数
-#         T_pred = forward_kinematics_T(q_torch, params_tensor)
-#         pose_pred = extract_pose_from_T(T_pred)
-#         pose_laser = extract_pose_from_T(T_laser_torch)
-#         err_vec = (pose_pred - pose_laser) * weights_torch
-#         return torch.linalg.norm(err_vec)
+#//     #定义误差范数函数
+#//     def err_norm_fn(params_tensor): # 需要接收组合参数
+#//         T_pred = forward_kinematics_T(q_torch, params_tensor)
+#//         pose_pred = extract_pose_from_T(T_pred)
+#//         pose_laser = extract_pose_from_T(T_laser_torch)
+#//         err_vec = (pose_pred - pose_laser) * weights_torch
+#//         return torch.linalg.norm(err_vec)
+#//     # 计算雅可比
+#//     # J_err = F.jacobian(err_norm_fn, dh_torch) # 旧的
+#//     print("compute_error_jacobian function needs update for combined parameters")
+#//     J_err = torch.zeros(24) # Placeholder
+#//     print(J_err)
+#//     return J_err
 
-#     # 计算雅可比
-#     # J_err = F.jacobian(err_norm_fn, dh_torch) # 旧的
-#     print("compute_error_jacobian function needs update for combined parameters")
-#     J_err = torch.zeros(24) # Placeholder
-#     print(J_err)
-#     return J_err
-
-#! 计算误差向量对 组合参数 的雅可比
+#! 计算误差向量对组合参数的雅可比
 def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单帧数据的误差向量对 组合参数 (DH+TCP) 的雅可比矩阵"""
     #* 转为 torch 张量
-    params_torch = torch.tensor(params, dtype=torch.float64, requires_grad=True) # 组合参数
+    params_torch = torch.tensor(params, dtype=torch.float64, requires_grad=True)
     q_torch = torch.as_tensor(joint_angles, dtype=torch.float64)
     T_laser_torch = torch.as_tensor(laser_matrix, dtype=torch.float64)
     weights_torch = torch.as_tensor(weights, dtype=torch.float64)
 
-    #* 定义误差向量函数
+    #* 定义包装函数
     def err_vec_fn(params_tensor):
         T_pred = forward_kinematics_T(q_torch, params_tensor) 
         pose_pred = extract_pose_from_T(T_pred)
@@ -238,12 +238,10 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
     return J
 
 if __name__ == '__main__':
-    # 合并初始 DH 参数和初始 TCP 参数
+    
     initial_params = np.concatenate((INIT_DH_PARAMS, INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
-
-    # 加载数据
-    joint_angles_data = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    laser_matrices_data = get_laser_tool_matrix()
-    joint_index = 0 # 选择要计算的关节
-   
+    joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)[0]
+    T_laser_np = get_laser_tool_matrix()[0]
+    jacobian = compute_error_vector_jacobian(initial_params, joint_angles, T_laser_np, ERROR_WEIGHTS)
+    save_jacobian_to_csv(jacobian)
     

@@ -190,7 +190,7 @@ class RokaeRobot:
 if __name__ == "__main__":
 
     robot = RokaeRobot()  
-    q_deg = [26.18229564,47.10895029,20.44052241,-143.5911443,87.23868486,-6.971798826]  
+    q_deg = [42.91441824,-0.414388123,49.04196013,-119.3252973,78.65535552,-5.225972875]  
     T_base_tool = robot.calculate_tool_matrix(q_deg)
     
     tool_position = T_base_tool['position']

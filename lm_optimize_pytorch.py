@@ -1,16 +1,20 @@
-"""使用Levenberg-Marquardt算法优化DH参数"""
 import os
 import numpy as np
 import torch
-from jacobian_torch import compute_error_vector_jacobian, forward_kinematics_T, extract_pose_from_T, get_laser_tool_matrix
+from jacobian_torch import (
+    compute_error_vector_jacobian, 
+    forward_kinematics_T, 
+    extract_pose_from_T, 
+    get_laser_tool_matrix,
+    ERROR_WEIGHTS
+)
 
-
-# 常量定义
+#* 数据的路径
 JOINT_ANGLE_FILE = 'data/joint_angle.csv'
 LASER_POS_FILE = 'data/laser_pos.csv'
-ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
-#* 全局DH参数: theta_offset, alpha, d, a
+
+#* 初始DH参数: theta_offset, alpha, d, a
 GLOBAL_DH_PARAMS = [0, 0, 380, 0,
                     -90, -90, 0, 30,
                     0, 0, 0, 440,
@@ -18,50 +22,55 @@ GLOBAL_DH_PARAMS = [0, 0, 380, 0,
                     0, 90, 0, 0,
                     180, -90, 83, 0]
 
-# 全部参数索引(0-23)
-ALL_INDICES = list(range(len(GLOBAL_DH_PARAMS)))
-# 直接指定固定参数索引
-OPT_INDICES = [i for i in ALL_INDICES if i not in [0,1,2,3,5,9,13,17,20,21,22,23]]  
-
 #* 添加TCP参数的初始值 (来自 jacobian_torch.py)
 INITIAL_TCP_POSITION = np.array([2, 2, 100])
 INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
-# 直接指定固定参数索引 (DH部分)
-DH_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23]
-# 是否优化TCP参数
-OPTIMIZE_TCP = True # 可以设置为 False 来仅优化DH
+#* 全部参数索引
+ALL_INDICES = list(range(len(GLOBAL_DH_PARAMS)))
+#* 直接指定固定参数索引
+OPT_INDICES = [i for i in ALL_INDICES if i not in [0,1,2,3,5,9,13,17,20,21,22,23]]  
 
+#* 直接指定固定参数索引 (DH部分)
+DH_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23]
+#* 是否优化TCP参数
+OPTIMIZE_TCP = True 
+
+
+#! 计算单组数据的误差向量
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
-    """计算单个样本的误差向量"""
-    # 转为张量并计算姿态差
+    #* 获取关节角度和参数
     q_t = torch.as_tensor(joint_angles, dtype=torch.float64)
-    params_t = torch.as_tensor(params, dtype=torch.float64) # 使用组合参数
-    T_pred = forward_kinematics_T(q_t, params_t) # 调用更新后的FK，传递组合参数
+    params_t = torch.as_tensor(params, dtype=torch.float64) 
+
+    #* 计算预测位姿
+    T_pred = forward_kinematics_T(q_t, params_t) 
     pose_pred = extract_pose_from_T(T_pred)
+
+    #* 获取激光跟踪仪位姿
     T_laser = torch.as_tensor(laser_matrix, dtype=torch.float64)
     pose_laser = extract_pose_from_T(T_laser)
+    
+    #* 计算误差向量
     return (pose_pred - pose_laser) * torch.as_tensor(weights, dtype=torch.float64)
 
+
+#! 计算所有样本的总误差（2-范数）
 def compute_total_error(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
-    """计算所有样本的总误差（2-范数）"""
     total_error = 0.0
     for i in range(len(joint_angles)):
         error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i], weights) # 使用组合参数
         total_error += torch.sum(error_vec**2)
     return torch.sqrt(total_error)
 
+#! 保存优化后的DH参数和TCP参数
 def save_optimization_results(params, filepath_prefix='results/optimized'):
-    """保存优化后的DH参数和TCP参数"""
     dirpath = os.path.dirname(filepath_prefix)
     if dirpath and not os.path.exists(dirpath):
         os.makedirs(dirpath)
 
-    # 分离参数
     dh_params = params[0:24]
     tcp_params = params[24:31]
-    
-    # 1. 保存DH参数 (6x4 格式)
     dh_filepath = f"{filepath_prefix}_dh_parameters.csv"
     dh_matrix = np.array(dh_params).reshape(6, 4)
     header_dh = "theta_offset,alpha,d,a"
@@ -71,8 +80,7 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
         for i, row in enumerate(dh_matrix):
             f.write(f"{row_labels_dh[i]},{','.join(f'{val:.6f}' for val in row)}\n")
     print(f"优化后的DH参数已保存到: {dh_filepath}")
-
-    # 2. 保存TCP参数
+    
     tcp_filepath = f"{filepath_prefix}_tcp_parameters.csv"
     header_tcp = "parameter,value"
     tcp_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
@@ -82,39 +90,46 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
             f.write(f"{name},{value:.6f}\n")
     print(f"优化后的TCP参数已保存到: {tcp_filepath}")
 
+
+#! LM优化
 def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None):
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
     lambda_val = lambda_init
     
-    # 读取所有数据
+    #* 读取所有数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
     
-    # 记录初始误差
+    #* 记录初始误差
     current_error = compute_total_error(params, joint_angles, laser_matrices)
-    # 计算平均误差
+
+    #* 计算平均误差
     avg_initial_error = current_error.item() / n_samples
     print(f"初始平均误差：{avg_initial_error:.6f}")
     
-    # 处理可优化参数索引
+    #* 处理可优化参数索引
     if opt_indices is None:
         opt_indices = list(range(len(initial_params)))
     opt_indices = np.array(opt_indices)
     
-    # LM迭代
+    #* LM迭代
     for iteration in range(max_iterations):
         all_errors = []
         all_jacobians = []
+
+        #* 计算所有样本的误差向量和雅可比矩阵
         for i in range(n_samples):
             error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i])
             jacobian = compute_error_vector_jacobian(params.numpy(), joint_angles[i], laser_matrices[i])
             all_errors.append(error_vec)
             all_jacobians.append(jacobian)
         error_vector = torch.cat(all_errors)
+
         #* 将所有雅可比矩阵堆叠成一个矩阵（N*6 x 31）
         J = torch.vstack(all_jacobians)
-        #* LM算法公式：(J^T * J + λ * I) * Δθ = -J^T * e
+
+        #* LM算法公式：(J^T J + λ * diag(J^T J)) * Δθ = -J^T e
         J_opt = J[:, opt_indices]
         JTJ = torch.matmul(J_opt.transpose(0, 1), J_opt)
         JTe = torch.matmul(J_opt.transpose(0, 1), error_vector)
@@ -124,10 +139,10 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
         while not update_success and inner_iterations < max_inner_iterations:
             inner_iterations += 1
             
-            # 添加阻尼项
+            #! 添加阻尼项
             H = JTJ + lambda_val * torch.diag(torch.diag(JTJ))
             
-            # 计算更新量
+            #! 计算更新量
             try:
                 delta = -torch.linalg.solve(H, JTe)
             except:
@@ -155,13 +170,11 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
 
                 #* 四元数归一化 (如果TCP被优化)
                 if any(idx in opt_indices for idx in range(24, 31)):
-                    q_tcp = params[27:31] # 提取四元数部分
+                    q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)
-                    if norm_q_tcp > 1e-9: # 避免除以零
+                    if norm_q_tcp > 1e-9: 
                         params[27:31] = q_tcp / norm_q_tcp
                     else:
-                        # 如果模长为0（不太可能发生），可以重置为一个有效的单位四元数，如 [0,0,0,1]
-                        # 或者发出警告/错误，具体取决于需求
                         params[27:31] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: TCP四元数模长接近于零，已重置为[0,0,0,1]")
 
@@ -244,11 +257,10 @@ if __name__ == '__main__':
     optimized_params = optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.1, opt_indices=opt_indices) # Pass combined params
     
     # 保存优化结果
-    save_optimization_results(optimized_params) # Call updated save function
+    save_optimization_results(optimized_params) 
     
     # 评估优化效果
-    evaluate_optimization(initial_params, optimized_params) # Pass combined params
-    
+    evaluate_optimization(initial_params, optimized_params) 
     # 输出优化前后的参数对比
     print("\n" + "="*70)
     print(" "*25 + "DH参数对比")
@@ -268,7 +280,6 @@ if __name__ == '__main__':
             param_diff = opt_dh_matrix[i, j] - init_dh_matrix[i, j]
             status = "已优化" if param_idx in opt_indices else "已固定"
             print(f"{i+1:^6}|{param_names[j]:^12}|{init_dh_matrix[i, j]:^15.4f}|{opt_dh_matrix[i, j]:^15.4f}|{param_diff:^15.4f}|{status:^10}")
-        # 每个关节后添加分隔线
         if i < 5:  
             print("-"*70)
     

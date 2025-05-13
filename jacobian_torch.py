@@ -31,11 +31,11 @@ JOINT_LIMITS = np.array([
 ])
 
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([0.1731, 1.1801, 238.3535])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.4961, 0.5031, 0.505, 0.4957])
+INIT_TOOL_OFFSET_POSITION = np.array([0.15, 1.2 ,234])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.493340, 0.502683, 0.508122, 0.495720])
 
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([3600.8319, 3300.7233, 10.6472, 0.0014, -0.0055, 0.7873, -0.6166])
+INIT_T_LASER_BASE_PARAMS = np.array([3610, 3300, 15, 0, 0, 0.5, -0.5])
 
 #! 激光跟踪仪工具位姿变换矩阵
 def get_laser_tool_matrix():
@@ -243,7 +243,7 @@ if __name__ == '__main__':
         INIT_DH_PARAMS, 
         INIT_TOOL_OFFSET_POSITION, 
         INIT_TOOL_OFFSET_QUATERNION,
-        INIT_T_LASER_BASE_PARAMS # 添加新的7个参数
+        INIT_T_LASER_BASE_PARAMS 
     ))
     # 将初始参数转换为PyTorch张量以用于后续计算
     initial_params_torch = torch.tensor(initial_params_np, dtype=torch.float64)
@@ -253,11 +253,11 @@ if __name__ == '__main__':
     # 获取激光跟踪仪测量的所有工具位姿矩阵 (虽然在这个测试中我们主要用预测的)
     all_T_laser_tool_measured_np = get_laser_tool_matrix()
 
-    print("--- Jacobian Calculation (First Frame) ---")
+    print("--- 雅可比矩阵计算（第一帧） ---")
     jacobian = compute_error_vector_jacobian(initial_params_np, all_joint_angles_np[0], all_T_laser_tool_measured_np[0], ERROR_WEIGHTS)
     save_jacobian_to_csv(jacobian)
-    print("Jacobian for the first frame saved.")
-    print("\\n--- Predicted Tool Pose in Laser Frame (First 5 Joint Angle Sets) ---")
+    print("雅可比矩阵已保存（第一帧）。")
+    print("\n--- 预测工具位姿在激光坐标系下（前5组关节角） ---")
 
     # 提取用于正向运动学的参数 (DH + TCP)
     params_for_fk_torch = initial_params_torch[0:31]
@@ -271,13 +271,21 @@ if __name__ == '__main__':
     T_laser_base_matrix_torch[0:3, 0:3] = R_laser_base_torch
     T_laser_base_matrix_torch[0:3, 3] = t_laser_base_pos_torch
 
-    num_frames_to_test = min(5, all_joint_angles_np.shape[0]) # 测试前5帧或所有帧（如果少于5帧）
+    # num_frames_to_test = min(5, all_joint_angles_np.shape[0]) # 测试前5帧或所有帧（如果少于5帧）
+    # 指定要测试的帧的索引 (0-based)
+    frames_to_test_indices = [1, 8, 18, 26] # 对应用户请求的第 2, 9, 19, 27 组
 
-    for i in range(num_frames_to_test):
+    # for i in range(num_frames_to_test):
+    for i in frames_to_test_indices:
+        # 检查索引是否越界
+        if i >= all_joint_angles_np.shape[0]:
+            print(f"\n警告: 索引 {i+1} 超出关节角度数据范围 (共 {all_joint_angles_np.shape[0]} 组). 跳过此索引.")
+            continue
+
         q_deg_array_np = all_joint_angles_np[i]
         q_torch = torch.as_tensor(q_deg_array_np, dtype=torch.float64)
 
-        print(f"\\nJoint Angles (Deg) Frame {i+1}: {q_deg_array_np.tolist()}")
+        print(f"\n关节角度（度）帧 {i+1}: {q_deg_array_np.tolist()}")
 
         # 1. 计算机器人模型预测的工具在基座坐标系下的位姿
         T_pred_robot_base_torch = forward_kinematics_T(q_torch, params_for_fk_torch)
@@ -289,7 +297,7 @@ if __name__ == '__main__':
         pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_frame_torch)
         
         pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()
-        print(f"Predicted Pose in Laser Frame (x,y,z,rx,ry,rz): {pose_pred_in_laser_np.tolist()}")
+        print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {pose_pred_in_laser_np.tolist()}")
 
    
     

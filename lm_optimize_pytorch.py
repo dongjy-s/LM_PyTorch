@@ -11,13 +11,9 @@ from jacobian_torch import (
     INIT_T_LASER_BASE_PARAMS,
     INIT_DH_PARAMS,
     JOINT_ANGLE_FILE,
-    LASER_POS_FILE,
     INIT_TOOL_OFFSET_POSITION,
     INIT_TOOL_OFFSET_QUATERNION
 )
-
-
-
 
 
 #* 固定参数索引
@@ -31,7 +27,7 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     params_t = torch.as_tensor(params, dtype=torch.float64) 
 
     #* 提取参数
-    params_for_fk = params_t[0:31] # DH (24) + TCP (3+4)
+    params_for_fk = params_t[0:31] 
     t_laser_base_pos = params_t[31:34]
     t_laser_base_quat = params_t[34:38]
 

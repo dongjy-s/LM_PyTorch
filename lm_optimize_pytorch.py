@@ -27,7 +27,7 @@ INITIAL_TCP_POSITION = np.array([2, 2, 100])
 INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
 #* 固定参数索引
-ALL_FIXED_INDICES = [0, 1, 2, 3, 5,6,9,10,13, 17,18,19, 20, 21, 22, 23] 
+ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] 
 
 
 #! 计算单组数据的误差向量

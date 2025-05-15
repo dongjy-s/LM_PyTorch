@@ -117,9 +117,9 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     #* 记录初始误差
     current_error = compute_total_error(params, joint_angles, laser_matrices)
 
-    #* 计算平均误差
-    avg_initial_error = current_error.item() / n_samples
-    print(f"初始平均误差：{avg_initial_error:.6f}")
+    #* 计算初始误差
+    avg_initial_error = current_error.item() 
+    print(f"初始误差：{avg_initial_error:.6f}")
     
     #* 处理可优化参数索引
     if opt_indices is None:
@@ -139,7 +139,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             all_jacobians.append(jacobian)
         error_vector = torch.cat(all_errors)
 
-        #* 将所有雅可比矩阵堆叠成一个矩阵（N*6 x 38）
+        #* 将所有雅可比矩阵堆叠成一个矩阵
         J = torch.vstack(all_jacobians)
 
         #* LM算法公式：(J^T J + λ * diag(J^T J)) * Δθ = -J^T e
@@ -181,7 +181,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
-                #* TCP四元数归一化 (如果TCP被优化)
+                #* TCP四元数归一化 
                 if any(idx in opt_indices for idx in range(27, 31)):
                     q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)
@@ -191,7 +191,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         params[27:31] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: TCP四元数模长接近于零，已重置为[0,0,0,1]")
                 
-                #* 激光跟踪仪-基座四元数归一化 (如果被优化)
+                #* 激光跟踪仪-基座四元数归一化 
                 if any(idx in opt_indices for idx in range(34, 38)):
                     q_laser_base = params[34:38]
                     norm_q_laser_base = torch.linalg.norm(q_laser_base)
@@ -230,20 +230,6 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
 #! 交替优化函数
 def alternate_optimize_parameters(initial_params, max_alt_iterations=10, convergence_tol=1e-5, 
                                  max_sub_iterations=30, lambda_init_group1=0.01, lambda_init_group2=0.001):
-    """
-    交替优化DH参数+TCP+激光XYZ参数与激光四元数参数
-    
-    Args:
-        initial_params: 初始参数数组，包含全部38个参数
-        max_alt_iterations: 交替优化最大迭代次数
-        convergence_tol: 收敛阈值，两次完整迭代后总误差改进量小于此值时认为收敛
-        max_sub_iterations: 每次子优化的最大迭代次数
-        lambda_init_group1: 第一组参数(DH+TCP+XYZ)的初始阻尼因子
-        lambda_init_group2: 第二组参数(四元数)的初始阻尼因子
-    
-    Returns:
-        优化后的参数数组
-    """
     print("\n" + "="*60)
     print(" "*20 + "开始交替优化")
     print("="*60)
@@ -253,17 +239,16 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
     
-    # 定义两组参数索引
-    # 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
-    all_indices_group1 = list(range(0, 34))  # 0-33
-    # 第二组：激光跟踪仪四元数
-    all_indices_group2 = list(range(34, 38))  # 34-37
-    
-    # 移除全局固定参数
+    #! 定义两组参数索引
+    #* 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
+    all_indices_group1 = list(range(0, 34))  
+    #* 第二组：激光跟踪仪四元数
+    all_indices_group2 = list(range(34, 38))  
+   
     opt_indices_group1 = [idx for idx in all_indices_group1 if idx not in ALL_FIXED_INDICES]
     opt_indices_group2 = [idx for idx in all_indices_group2 if idx not in ALL_FIXED_INDICES]
     
-    # 初始化参数和误差
+    #! 初始化参数和误差
     params = np.array(initial_params)
     current_error = compute_total_error(params, joint_angles, laser_matrices).item()
     avg_initial_error = current_error / n_samples
@@ -276,11 +261,11 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     # 记录误差历史
     error_history = [current_error]
     
-    # 交替优化主循环
+    #! 交替优化主循环
     for alt_iteration in range(max_alt_iterations):
         print(f"\n===== 交替优化循环 {alt_iteration + 1}/{max_alt_iterations} =====")
         
-        # 第一步：优化DH参数 + TCP + 激光XYZ，固定激光四元数
+        #! 第一步：优化DH参数 + TCP + 激光XYZ，固定激光四元数
         print("\n----- 第一步：优化DH参数 + TCP + 激光XYZ -----")
         params_step1 = optimize_dh_parameters(
             params, 
@@ -294,7 +279,7 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         avg_error_step1 = error_step1 / n_samples
         print(f"第一步后平均误差: {avg_error_step1:.6f}")
         
-        # 第二步：优化激光四元数，固定DH参数+TCP+激光XYZ
+        #! 第二步：优化激光四元数，固定DH参数+TCP+激光XYZ
         print("\n----- 第二步：优化激光四元数 -----")
         params_step2 = optimize_dh_parameters(
             params_step1, 
@@ -372,7 +357,6 @@ def evaluate_optimization(initial_params, optimized_params):
 
 
 if __name__ == '__main__':
-    # 定义初始DH参数 和 TCP参数 和 激光跟踪仪-基座变换参数
     initial_dh_params = np.array(INIT_DH_PARAMS)
     initial_tcp_params = np.concatenate((INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
     initial_params = np.concatenate((initial_dh_params, initial_tcp_params, INIT_T_LASER_BASE_PARAMS)) 
@@ -392,20 +376,23 @@ if __name__ == '__main__':
         lambda_init_group2=0.01   # 第二组参数初始阻尼因子
     )
     
-    # 可选：最终微调（使用交替优化结果作为初始值进行一次整体优化）
-    print("\n进行最终微调优化...")
-    final_optimized_params = optimize_dh_parameters(
-        optimized_params, 
-        max_iterations=20, 
-        lambda_init=0.001, 
-        opt_indices=opt_indices
-    )
+    # # 可选：最终微调（使用交替优化结果作为初始值进行一次整体优化）
+    # print("\n进行最终微调优化...")
+    # final_optimized_params = optimize_dh_parameters(
+    #     optimized_params, 
+    #     max_iterations=20, 
+    #     lambda_init=0.001, 
+    #     opt_indices=opt_indices
+    # )
     
-    # 保存最终优化结果
-    save_optimization_results(final_optimized_params) 
+    # # 保存最终优化结果
+    # save_optimization_results(final_optimized_params) 
     
-    # 评估优化效果
-    evaluate_optimization(initial_params, final_optimized_params) 
+    # # 评估优化效果
+    # evaluate_optimization(initial_params, final_optimized_params) 
+
+
+    
     # 输出优化前后的参数对比
     print("\n" + "="*70)
     print(" "*25 + "DH参数对比")
@@ -417,7 +404,7 @@ if __name__ == '__main__':
     
     # 将参数重构为6×4矩阵，方便查看 (DH部分)
     init_dh_matrix = initial_params[0:24].reshape(6, 4)
-    opt_dh_matrix = final_optimized_params[0:24].reshape(6, 4)
+    opt_dh_matrix = optimized_params[0:24].reshape(6, 4)
     
     for i in range(6):  
         for j in range(4):  
@@ -434,7 +421,7 @@ if __name__ == '__main__':
     print("="*70)
     tcp_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
     init_tcp_params = initial_params[24:31]
-    opt_tcp_params = final_optimized_params[24:31]
+    opt_tcp_params = optimized_params[24:31]
     for k in range(7):
         tcp_idx = 24 + k
         tcp_diff = opt_tcp_params[k] - init_tcp_params[k]
@@ -447,7 +434,7 @@ if __name__ == '__main__':
     print("="*70)
     t_laser_base_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
     init_t_laser_base_params = initial_params[31:38]
-    opt_t_laser_base_params = final_optimized_params[31:38]
+    opt_t_laser_base_params = optimized_params[31:38]
     for k in range(7):
         t_laser_base_idx = 31 + k
         t_laser_base_diff = opt_t_laser_base_params[k] - init_t_laser_base_params[k]

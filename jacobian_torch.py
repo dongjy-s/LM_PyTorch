@@ -40,12 +40,15 @@ JOINT_LIMITS = np.array([
 ])
 
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([0.15, 2, 240])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.5, 0.5, 0.5, 0.5])
+# INIT_TOOL_OFFSET_POSITION = np.array([0.15, 1.2, 240])
+# INIT_TOOL_OFFSET_QUATERNION = np.array([0.5, 0.5, 0.5, 0.5])
 
+INIT_TOOL_OFFSET_POSITION = np.array([0.1731, 1.1801, 238.3535])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.4961, 0.5031, 0.505, 0.4957])
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-# INIT_T_LASER_BASE_PARAMS = np.array([3610.831933, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166])
-INIT_T_LASER_BASE_PARAMS = np.array([3610, 3300, 15, 0.005078, -0.005171, 0.786759, -0.617218])
+
+# INIT_T_LASER_BASE_PARAMS = np.array([3611, 3301, 14, 0.005078, -0.005171, 0.786759, -0.617218])
+INIT_T_LASER_BASE_PARAMS = np.array([3610.831933, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166])
 
 #! 激光跟踪仪工具位姿变换矩阵
 def get_laser_tool_matrix():
@@ -127,7 +130,7 @@ def quaternion_to_rotation_matrix(q):
     R[2, 2] = 1 - 2*x*x - 2*y*y
     return R
 
-#! 正向运动学（PyTorch前向传播）
+#! 正向运动学
 def forward_kinematics_T(q_deg_array, params_torch):
     """
         正向运动学公式：

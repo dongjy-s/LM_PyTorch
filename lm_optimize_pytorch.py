@@ -27,7 +27,7 @@ INITIAL_TCP_POSITION = np.array([2, 2, 100])
 INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
 #* 固定参数索引
-ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23] 
+ALL_FIXED_INDICES = [0, 1, 2, 3, 5,6,9,10,13, 17,18,19, 20, 21, 22, 23] 
 
 
 #! 计算单组数据的误差向量
@@ -66,12 +66,12 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
     tcp_params = params[24:31]
     dh_filepath = f"{filepath_prefix}_dh_parameters.csv"
     dh_matrix = np.array(dh_params).reshape(6, 4)
-    header_dh = "theta_offset,alpha,d,a"
+    header_dh = "alpha,a,d,theta_offset"
     row_labels_dh = [f"Joint_{i+1}" for i in range(6)]
     with open(dh_filepath, 'w') as f:
         f.write(f",{header_dh}\n")  
         for i, row in enumerate(dh_matrix):
-            f.write(f"{row_labels_dh[i]},{','.join(f'{val:.6f}' for val in row)}\n")
+            f.write(f"{row_labels_dh[i]},{row[1]:.6f},{row[3]:.6f},{row[2]:.6f},{row[0]:.6f}\n")
     print(f"优化后的DH参数已保存到: {dh_filepath}")
     
     tcp_filepath = f"{filepath_prefix}_tcp_parameters.csv"
@@ -161,7 +161,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
-                #* 四元数归一化 (如果TCP被优化)
+                #* 四元数归一化 
                 if any(idx in opt_indices for idx in range(24, 31)):
                     q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)

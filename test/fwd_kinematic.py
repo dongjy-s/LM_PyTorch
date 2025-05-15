@@ -366,7 +366,6 @@ if __name__ == '__main__':
 
     # True  - 从CSV文件加载优化后的参数
     # False - 使用脚本中预定义的 LASER_... 参数 (参考/雷达数据)
-    # use_optimized_data_source = False # 这行似乎不再需要，因为我们会分别运行两种情况
 
     print("\n" + "="*70)
     print(" " * 20 + "运动学分析与误差对比")
@@ -382,7 +381,7 @@ if __name__ == '__main__':
     print(" " * 25 + "误差结果对比总结")
     print("="*70)
     if rmse_optimized is not None and rmse_reference is not None:
-        print(f"使用参考/雷达参数的总体平均RMSE: {rmse_reference:.6f}")
+        print(f"使用激光参数的总体平均RMSE: {rmse_reference:.6f}")
         print(f"使用优化后参数的总体平均RMSE: {rmse_optimized:.6f}")
         if rmse_reference > 1e-9: # 避免除以零
             improvement = (rmse_reference - rmse_optimized) / rmse_reference * 100

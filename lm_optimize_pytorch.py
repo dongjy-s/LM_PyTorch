@@ -21,8 +21,8 @@ GLOBAL_DH_PARAMS = [0, 0, 380, 0,
 
 # 全部参数索引(0-23)
 ALL_INDICES = list(range(len(GLOBAL_DH_PARAMS)))
-# 直接指定可优化参数索引（如固定第0、5、10、15、20）
-OPT_INDICES = [i for i in ALL_INDICES if i not in [0,1,2,3,5,9,13,17,20,21,22,23]]  # 只举例，实际可自定义
+# 固定指定的参数
+OPT_INDICES = [i for i in ALL_INDICES if i not in [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] ]  # 只举例，实际可自定义
 
 def compute_error_vector(dh_params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     """计算单个样本的误差向量"""

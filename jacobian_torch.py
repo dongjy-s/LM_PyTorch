@@ -31,11 +31,11 @@ JOINT_LIMITS = np.array([
 ])
 
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([0.1731, 1.1801, 238.3535])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.4961, 0.5031, 0.505, 0.4957])
+INIT_TOOL_OFFSET_POSITION = np.array([-0.971448, 0.853957, 238.679754])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.493340, 0.502683, 0.508122, 0.495720])
 
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([3610.831933, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166])
+INIT_T_LASER_BASE_PARAMS = np.array([3612.638813, 3298.711667, 19.258694, 0.005078, -0.005171, 0.786759, -0.617218])
 
 #! 激光跟踪仪工具位姿变换矩阵
 def get_laser_tool_matrix():

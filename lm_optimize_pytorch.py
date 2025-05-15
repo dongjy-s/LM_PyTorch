@@ -6,7 +6,10 @@ from jacobian_torch import (
     forward_kinematics_T, 
     extract_pose_from_T, 
     get_laser_tool_matrix,
-    ERROR_WEIGHTS
+    ERROR_WEIGHTS,
+    INITIAL_TCP_POSITION,
+    INITIAL_TCP_QUATERNION,
+    GLOBAL_DH_PARAMS
 )
 
 #* 数据的路径
@@ -14,17 +17,17 @@ JOINT_ANGLE_FILE = 'data/joint_angle.csv'
 LASER_POS_FILE = 'data/laser_pos.csv'
 
 
-#* 初始DH参数: theta_offset, alpha, d, a
-GLOBAL_DH_PARAMS = [0, 0, 380, 0,
-                    -90, -90, 0, 30,
-                    0, 0, 0, 440,
-                    0, -90, 435, 35,
-                    0, 90, 0, 0,
-                    180, -90, 83, 0]
+# #* 初始DH参数: theta_offset, alpha, d, a
+# GLOBAL_DH_PARAMS = [0, 0, 380, 0,
+#                     -90, -90, 0, 30,
+#                     0, 0, 0, 440,
+#                     0, -90, 435, 35,
+#                     0, 90, 0, 0,
+#                     180, -90, 83, 0]
 
-#* 添加TCP参数的初始值 (来自 jacobian_torch.py)
-INITIAL_TCP_POSITION = np.array([2, 2, 100])
-INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
+# #* 添加TCP参数的初始值 (来自 jacobian_torch.py)
+# INITIAL_TCP_POSITION = np.array([0.1, 1, 100])
+# INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
 #* 固定参数索引
 ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] 

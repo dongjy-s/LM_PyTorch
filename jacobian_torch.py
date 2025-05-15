@@ -11,7 +11,7 @@ LASER_POS_FILE = 'data/laser_pos.csv'
 ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
 #! 待优化的DH参数: theta_offset, alpha, d, a 单位:mm,度
-INIT_DH_PARAMS = [0, 0, 380, 0,
+GLOBAL_DH_PARAMS = [0, 0, 380, 0,
                     -90, -90, 0, 30,
                     0, 0, 0, 440,
                     0, -90, 435, 35,
@@ -29,8 +29,8 @@ JOINT_LIMITS = np.array([
 ])
 
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([1,1,100])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
+INITIAL_TCP_POSITION = np.array([0.15,1.18,200])
+INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
 
 #! 激光跟踪仪工具位姿变换矩阵
 def get_laser_tool_matrix():
@@ -194,7 +194,7 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv
     print(f"雅可比矩阵已保存到: {filepath}")
 
  #! 计算误差范数对 DH 参数的雅可比(冗余)
-#// def compute_error_jacobian(dh_params=INIT_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
+#// def compute_error_jacobian(dh_params=GLOBAL_DH_PARAMS, joint_angle_file=JOINT_ANGLE_FILE, weights=ERROR_WEIGHTS, index=0):
 #//     joint_angles = np.loadtxt(joint_angle_file, delimiter=',', skiprows=1)[index]
 #//   T_laser_np = get_laser_tool_matrix()[index]
 #//     # 转为 torch 张量
@@ -239,7 +239,7 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
 
 if __name__ == '__main__':
     
-    initial_params = np.concatenate((INIT_DH_PARAMS, INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
+    initial_params = np.concatenate((GLOBAL_DH_PARAMS, INITIAL_TCP_POSITION, INITIAL_TCP_QUATERNION))
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)[0]
     T_laser_np = get_laser_tool_matrix()[0]
     jacobian = compute_error_vector_jacobian(initial_params, joint_angles, T_laser_np, ERROR_WEIGHTS)

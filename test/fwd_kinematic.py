@@ -196,13 +196,14 @@ def extract_pose_from_T(T):
         
     return torch.cat([position, euler_angles_torch])
 
-#! 计算预测位姿与测量位姿之间的平均加权误差 (与lm_optimize_pytorch.py中的evaluate_optimization一致)
+#! 计算预测位姿与测量位姿之间的平均加权误差 (修改为计算分量的RMSE，与lm_optimize_pytorch.py中的compute_total_error一致)
 def compute_average_weighted_error(joint_angles_all_frames_np, 
                                    fk_params_torch, 
                                    T_laser_base_matrix_torch, 
                                    measured_T_matrices_all_frames_np, 
                                    frames_to_process_indices):
-    all_weighted_error_norms = []
+    total_weighted_error_sum_sq = 0.0 # 用于累加所有帧的加权误差平方和
+    num_processed_frames = 0
 
     if ERROR_WEIGHTS_IMPORTED:
         ERROR_WEIGHTS_torch = torch.tensor(ERROR_WEIGHTS, dtype=torch.float64, device=fk_params_torch.device)
@@ -236,12 +237,17 @@ def compute_average_weighted_error(joint_angles_all_frames_np,
         # 应用权重
         weighted_error_vector = error_vector_original * ERROR_WEIGHTS_torch
         
-        # 计算加权误差向量的L2范数
-        norm_of_weighted_error = torch.linalg.norm(weighted_error_vector)
-        all_weighted_error_norms.append(norm_of_weighted_error)
+        # 累加加权误差向量各分量的平方和
+        total_weighted_error_sum_sq += torch.sum(weighted_error_vector**2)
+        num_processed_frames += 1
         
-    avg_weighted_error = torch.mean(torch.stack(all_weighted_error_norms)) if all_weighted_error_norms else torch.tensor(0.0, dtype=torch.float64)
-    return avg_weighted_error.item()
+    if num_processed_frames == 0:
+        return 0.0 # 或者根据需要处理，例如返回NaN或抛出异常
+        
+    # 计算均方误差，然后开方得到RMSE
+    mean_squared_error = total_weighted_error_sum_sq / num_processed_frames
+    avg_rmse = torch.sqrt(mean_squared_error)
+    return avg_rmse.item()
 
 def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
     if use_optimized_csv_data:
@@ -349,19 +355,43 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
             all_T_laser_tool_measured_np,
             frames_to_test_indices
         )
-        print(f"\n--- 平均加权误差评估 (与优化脚本一致) (基于全部 {len(frames_to_test_indices)} 组, 使用 {param_source_name}) ---")
-        print(f"总体平均加权误差: {avg_total_weighted_error:.6f}")
+        print(f"\n--- 平均加权误差评估 (所有误差分量的RMSE，与优化脚本一致) (基于全部 {len(frames_to_test_indices)} 组, 使用 {param_source_name}) ---")
+        print(f"总体平均RMSE: {avg_total_weighted_error:.6f}")
+        return avg_total_weighted_error
     else:
         print("\n没有可用的组用于计算平均误差。")
+        return None
 
 if __name__ == '__main__':
 
     # True  - 从CSV文件加载优化后的参数
     # False - 使用脚本中预定义的 LASER_... 参数 (参考/雷达数据)
-    use_optimized_data_source = False
+    # use_optimized_data_source = False # 这行似乎不再需要，因为我们会分别运行两种情况
 
-    perform_kinematics_analysis_and_print_results(use_optimized_csv_data=True)
-    perform_kinematics_analysis_and_print_results(use_optimized_csv_data=False)
+    print("\n" + "="*70)
+    print(" " * 20 + "运动学分析与误差对比")
+    print("="*70)
+
+    print("\n--- 分析1: 使用优化后的参数 (来自CSV文件) ---")
+    rmse_optimized = perform_kinematics_analysis_and_print_results(use_optimized_csv_data=True)
+
+    print("\n--- 分析2: 使用预定义的参考/雷达参数 ---")
+    rmse_reference = perform_kinematics_analysis_and_print_results(use_optimized_csv_data=False)
+
+    print("\n" + "="*70)
+    print(" " * 25 + "误差结果对比总结")
+    print("="*70)
+    if rmse_optimized is not None and rmse_reference is not None:
+        print(f"使用参考/雷达参数的总体平均RMSE: {rmse_reference:.6f}")
+        print(f"使用优化后参数的总体平均RMSE: {rmse_optimized:.6f}")
+        if rmse_reference > 1e-9: # 避免除以零
+            improvement = (rmse_reference - rmse_optimized) / rmse_reference * 100
+            print(f"通过优化实现的RMSE改进率: {improvement:.2f}%")
+        else:
+            print("参考RMSE过小，无法计算改进率。")
+    else:
+        print("未能成功计算一个或两个RMSE值，无法进行对比。")
+    print("="*70)
     
 
    

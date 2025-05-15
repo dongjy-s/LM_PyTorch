@@ -56,11 +56,18 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
 
 #! 计算所有样本的总误差（2-范数）
 def compute_total_error(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
-    total_error = 0.0
-    for i in range(len(joint_angles)):
+    total_error_sum_sq = 0.0 # 修改变量名以更清晰地表示是误差平方和
+    n_samples = len(joint_angles)
+    if n_samples == 0:
+        return torch.tensor(0.0, dtype=torch.float64) # 处理空数据情况
+
+    for i in range(n_samples):
         error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i], weights) # 使用组合参数
-        total_error += torch.sum(error_vec**2)
-    return torch.sqrt(total_error)
+        total_error_sum_sq += torch.sum(error_vec**2)
+    
+    # 返回平均误差 (RMS误差)
+    mean_squared_error = total_error_sum_sq / n_samples
+    return torch.sqrt(mean_squared_error)
 
 #! 保存优化后的DH参数和TCP参数
 def save_optimization_results(params, filepath_prefix='results/optimized'):
@@ -113,13 +120,16 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
+    if n_samples == 0:
+        print("错误: 无法加载关节角度或激光数据，样本数量为0。")
+        return initial_params # 或者抛出异常
     
     #* 记录初始误差
-    current_error = compute_total_error(params, joint_angles, laser_matrices)
+    current_avg_error = compute_total_error(params, joint_angles, laser_matrices) # 已修改为计算平均误差
 
     #* 计算初始误差
-    avg_initial_error = current_error.item() 
-    print(f"初始误差：{avg_initial_error:.6f}")
+    print(f"初始平均误差：{current_avg_error.item():.6f}")
+    avg_initial_error = current_avg_error.item() #! 修正: 保存初始平均误差
     
     #* 处理可优化参数索引
     if opt_indices is None:
@@ -172,12 +182,12 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             params_new[opt_indices] += delta
             
             # 计算新误差
-            new_error = compute_total_error(params_new, joint_angles, laser_matrices)
+            new_avg_error = compute_total_error(params_new, joint_angles, laser_matrices) # 已修改为计算平均误差
             
             # 判断是否接受更新
-            if new_error < current_error:
+            if new_avg_error < current_avg_error:
                 params = params_new
-                current_error = new_error
+                current_avg_error = new_avg_error # 更新为平均误差
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
@@ -201,7 +211,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         params[34:38] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: 激光跟踪仪-基座四元数模长接近于零，已重置为[0,0,0,1]")
 
-                print(f"迭代 {iteration+1}, 误差: {current_error.item():.6f}, λ = {lambda_val:.6e}")
+                print(f"迭代 {iteration+1}, 平均误差: {current_avg_error.item():.6f}, λ = {lambda_val:.6e}") # 修改打印信息
             else:
                 lambda_val *= 10
                 print(f"拒绝更新，增大阻尼因子 λ = {lambda_val}")
@@ -221,10 +231,9 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
         if update_success and torch.norm(delta) < tol:
             print(f"参数变化小于阈值 {tol}，在第 {iteration+1} 次迭代后收敛")
             break
-    final_error = current_error.item()
-    avg_final_error = final_error / n_samples
-    improvement = (avg_initial_error - avg_final_error) / avg_initial_error * 100 if avg_initial_error > 1e-9 else 0
-    print(f"优化完成，初始平均误差: {avg_initial_error:.6f}, 最终平均误差: {avg_final_error:.6f}, 改进率: {improvement:.2f}%")
+    final_avg_error = current_avg_error.item() # 使用平均误差
+    improvement = (avg_initial_error - final_avg_error) / avg_initial_error * 100 if avg_initial_error > 1e-9 else 0 # avg_initial_error 已经在前面定义为平均误差
+    print(f"优化完成，初始平均误差: {avg_initial_error:.6f}, 最终平均误差: {final_avg_error:.6f}, 改进率: {improvement:.2f}%")
     return params.numpy()
 
 #! 交替优化函数
@@ -250,16 +259,16 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     
     #! 初始化参数和误差
     params = np.array(initial_params)
-    current_error = compute_total_error(params, joint_angles, laser_matrices).item()
-    avg_initial_error = current_error / n_samples
-    print(f"初始平均误差: {avg_initial_error:.6f}")
+    current_avg_error_val = compute_total_error(params, joint_angles, laser_matrices).item() # 已修改为计算平均误差, 使用 .item() 获取数值
+    avg_initial_error_alternate = current_avg_error_val #! 为交替优化的初始误差单独命名
+    print(f"初始平均误差: {avg_initial_error_alternate:.6f}")
     
     # 打印参数组信息
     print(f"第一组参数索引 (共{len(opt_indices_group1)}个): {opt_indices_group1}")
     print(f"第二组参数索引 (共{len(opt_indices_group2)}个): {opt_indices_group2}")
     
     # 记录误差历史
-    error_history = [current_error]
+    error_history_avg = [avg_initial_error_alternate] # 记录平均误差, 使用新的初始误差变量名
     
     #! 交替优化主循环
     for alt_iteration in range(max_alt_iterations):
@@ -275,8 +284,7 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         )
         
         # 计算第一步优化后的误差
-        error_step1 = compute_total_error(params_step1, joint_angles, laser_matrices).item()
-        avg_error_step1 = error_step1 / n_samples
+        avg_error_step1 = compute_total_error(params_step1, joint_angles, laser_matrices).item() # 已修改为计算平均误差
         print(f"第一步后平均误差: {avg_error_step1:.6f}")
         
         #! 第二步：优化激光四元数，固定DH参数+TCP+激光XYZ
@@ -289,17 +297,16 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         )
         
         # 计算第二步优化后的误差
-        error_step2 = compute_total_error(params_step2, joint_angles, laser_matrices).item()
-        avg_error_step2 = error_step2 / n_samples
+        avg_error_step2 = compute_total_error(params_step2, joint_angles, laser_matrices).item() # 已修改为计算平均误差
         print(f"第二步后平均误差: {avg_error_step2:.6f}")
         
         # 更新参数和误差
         params = params_step2
-        error_history.append(error_step2)
+        error_history_avg.append(avg_error_step2) # 添加平均误差
         
         # 计算误差改进量
-        error_improvement = error_history[-2] - error_history[-1]
-        relative_improvement = error_improvement / error_history[-2] if error_history[-2] > 1e-9 else 0
+        error_improvement = error_history_avg[-2] - error_history_avg[-1] # 基于平均误差计算
+        relative_improvement = error_improvement / error_history_avg[-2] if error_history_avg[-2] > 1e-9 else 0
         
         print(f"\n本次循环误差改进: {error_improvement:.6f}, 相对改进: {relative_improvement*100:.4f}%")
         
@@ -309,51 +316,58 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
             break
             
     # 计算总体优化效果
-    final_error = error_history[-1]
-    avg_final_error = final_error / n_samples
-    total_improvement = (avg_initial_error - avg_final_error) / avg_initial_error * 100 if avg_initial_error > 1e-9 else 0
+    final_avg_error_alternate = error_history_avg[-1] # 使用平均误差
+    total_improvement = (avg_initial_error_alternate - final_avg_error_alternate) / avg_initial_error_alternate * 100 if avg_initial_error_alternate > 1e-9 else 0
     
     print("\n" + "="*60)
     print(f"交替优化完成，共进行了 {alt_iteration + 1} 次循环")
-    print(f"初始平均误差: {avg_initial_error:.6f}")
-    print(f"最终平均误差: {avg_final_error:.6f}")
+    print(f"初始平均误差: {avg_initial_error_alternate:.6f}") 
+    print(f"最终平均误差: {final_avg_error_alternate:.6f}")
     print(f"总体改进率: {total_improvement:.2f}%")
     print("="*60)
     
     return params
 
 def evaluate_optimization(initial_params, optimized_params):
-    """评估优化效果"""
+    """评估优化效果，报告与优化器目标一致的RMSE"""
     # 读取数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
+
+    if n_samples == 0:
+        print("评估警告: 样本数量为0，无法进行评估。")
+        return
     
-    print("\n" + "="*50)
-    print(" "*18 + "优化效果评估")
-    print("="*50)
-    print(f"{'姿态':^8}|{'初始误差':^15}|{'优化后误差':^15}|{'改进率':^10}")
-    print("-"*50)
+    print("\n" + "="*60) # 调整分隔线长度以适应新的表头
+    print(" "*15 + "优化效果评估 (所有分量的RMSE)") # 修改标题
+    print("="*60)
+    # 打印表头，明确指出总体平均误差是RMSE
+    print(f"{'姿态(帧)':^12}|{'初始单帧范数':^18}|{'优化后单帧范数':^20}|{'单帧改进率':^15}")
+    print("-"*68) # 调整分隔线长度
     
-    total_initial_error = 0
-    total_optimized_error = 0
-    
-    for i in range(len(joint_angles)):
-        initial_error = torch.linalg.norm(compute_error_vector(initial_params, joint_angles[i], laser_matrices[i]))
-        optimized_error = torch.linalg.norm(compute_error_vector(optimized_params, joint_angles[i], laser_matrices[i]))
-        improvement = (1 - optimized_error/initial_error) * 100 if initial_error > 1e-9 else 0
+    # 计算初始和优化后的总体RMSE (与compute_total_error一致)
+    initial_total_rmse = compute_total_error(initial_params, joint_angles, laser_matrices).item()
+    optimized_total_rmse = compute_total_error(optimized_params, joint_angles, laser_matrices).item()
+
+    # 逐帧显示误差范数及其改进，用于详细分析
+    for i in range(n_samples):
+        initial_error_vec = compute_error_vector(initial_params, joint_angles[i], laser_matrices[i])
+        optimized_error_vec = compute_error_vector(optimized_params, joint_angles[i], laser_matrices[i])
         
-        print(f"{i+1:^8}|{initial_error.item():^15.6f}|{optimized_error.item():^15.6f}|{improvement:^10.2f}%")
+        initial_frame_norm = torch.linalg.norm(initial_error_vec).item()
+        optimized_frame_norm = torch.linalg.norm(optimized_error_vec).item()
         
-        total_initial_error += initial_error.item()
-        total_optimized_error += optimized_error.item()
+        frame_improvement = (1 - optimized_frame_norm / initial_frame_norm) * 100 if initial_frame_norm > 1e-9 else 0
+        
+        print(f"{i+1:^12}|{initial_frame_norm:^18.6f}|{optimized_frame_norm:^20.6f}|{frame_improvement:^14.2f}%")
     
-    avg_initial_error = total_initial_error / n_samples
-    avg_optimized_error = total_optimized_error / n_samples
-    avg_improvement = (1 - avg_optimized_error/avg_initial_error) * 100 if avg_initial_error > 1e-9 else 0
-    print("-"*50)
-    print(f"{'总体平均':^8}|{avg_initial_error:^15.6f}|{avg_optimized_error:^15.6f}|{avg_improvement:^10.2f}%")
-    print("="*50)
+    # 计算总体改进率 (基于RMSE)
+    avg_improvement_rmse = (1 - optimized_total_rmse / initial_total_rmse) * 100 if initial_total_rmse > 1e-9 else 0
+    
+    print("-"*68) # 调整分隔线长度
+    print(f"{'总体平均RMSE':^12}|{initial_total_rmse:^18.6f}|{optimized_total_rmse:^20.6f}|{avg_improvement_rmse:^14.2f}%")
+    print("="*60)
 
 
 if __name__ == '__main__':
@@ -391,7 +405,11 @@ if __name__ == '__main__':
     # # 评估优化效果
     # evaluate_optimization(initial_params, final_optimized_params) 
 
+    # 保存优化结果 (使用交替优化的结果)
+    save_optimization_results(optimized_params) 
 
+    # 评估优化效果 (使用交替优化的结果)
+    evaluate_optimization(initial_params, optimized_params)
     
     # 输出优化前后的参数对比
     print("\n" + "="*70)

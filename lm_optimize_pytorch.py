@@ -16,8 +16,8 @@ from jacobian_torch import (
 )
 
 
-#* 固定参数索引
-ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] 
+#* 固定的参数
+ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
 
 
 #! 计算单组数据的误差向量
@@ -385,11 +385,11 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=5,      # 最大交替迭代次数
+        max_alt_iterations=3,      # 最大交替迭代次数
         convergence_tol=1e-6,      # 收敛阈值
-        max_sub_iterations=30,     # 每次子优化的最大迭代次数
+        max_sub_iterations=10,     # 每次子优化的最大迭代次数
         lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
-        lambda_init_group2=0.01   # 第二组参数初始阻尼因子（较小）
+        lambda_init_group2=0.01   # 第二组参数初始阻尼因子
     )
     
     # 可选：最终微调（使用交替优化结果作为初始值进行一次整体优化）

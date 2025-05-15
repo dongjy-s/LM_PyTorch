@@ -336,16 +336,14 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
         current_joint_angles_np = all_joint_angles_np[frame_idx]
         current_joint_angles_torch = torch.as_tensor(current_joint_angles_np, dtype=torch.float64)
 
-#!打印关机角度
-        # print(f"\n--- 第 {frame_idx+1} 组 --- ")
-        # print(f"关节角度 (度): {current_joint_angles_np.tolist()}")
-
-        # T_pred_robot_base_torch = forward_kinematics_T(current_joint_angles_torch, params_for_fk_torch)
-        # T_pred_in_laser_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
-        # pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_torch)
-        # pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()
-        # formatted_pose = [f"{val:.4f}" for val in pose_pred_in_laser_np]
-        # print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {formatted_pose}")
+#!打印关节角度
+        print(f"\n--- 第 {frame_idx+1} 组 --- ")
+        T_pred_robot_base_torch = forward_kinematics_T(current_joint_angles_torch, params_for_fk_torch)
+        T_pred_in_laser_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
+        pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_torch)
+        pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()
+        formatted_pose = [f"{val:.4f}" for val in pose_pred_in_laser_np]
+        print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {formatted_pose}")
     
     if frames_to_test_indices:
         avg_total_weighted_error = compute_average_weighted_error(

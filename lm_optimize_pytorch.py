@@ -176,7 +176,11 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                     print(f"阻尼因子超过阈值 1e8，提前结束优化")
                     return params.numpy()
                 continue
-                
+            
+            # 打印更新步长和方向
+            delta_norm = torch.linalg.norm(delta).item()
+            print(f"  尝试更新: 步长 (范数) = {delta_norm:.6e}, 方向 (delta) = {delta.numpy()}")
+
             # 尝试更新
             params_new = params.clone()
             params_new[opt_indices] += delta

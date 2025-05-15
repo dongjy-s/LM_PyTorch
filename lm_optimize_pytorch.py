@@ -17,7 +17,7 @@ from jacobian_torch import (
 
 
 #* 固定参数索引
-ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 9, 13, 17, 20, 21, 22, 23] 
+ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] 
 
 
 #! 计算单组数据的误差向量

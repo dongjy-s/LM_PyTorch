@@ -31,11 +31,11 @@ JOINT_LIMITS = np.array([
 ])
 
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([0.15, 1.2 ,234])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.493340, 0.502683, 0.508122, 0.495720])
+INIT_TOOL_OFFSET_POSITION = np.array([0.1731, 1.1801, 238.3535])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.4961, 0.5031, 0.505, 0.4957])
 
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([3610, 3300, 15, 0, 0, 0.5, -0.5])
+INIT_T_LASER_BASE_PARAMS = np.array([3610.831933, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166])
 
 #! 激光跟踪仪工具位姿变换矩阵
 def get_laser_tool_matrix():
@@ -285,7 +285,7 @@ if __name__ == '__main__':
         q_deg_array_np = all_joint_angles_np[i]
         q_torch = torch.as_tensor(q_deg_array_np, dtype=torch.float64)
 
-        print(f"\n关节角度（度）帧 {i+1}: {q_deg_array_np.tolist()}")
+        print(f"\n关节角度（度） {i+1}: {q_deg_array_np.tolist()}")
 
         # 1. 计算机器人模型预测的工具在基座坐标系下的位姿
         T_pred_robot_base_torch = forward_kinematics_T(q_torch, params_for_fk_torch)

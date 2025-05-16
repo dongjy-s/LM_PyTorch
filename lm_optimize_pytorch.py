@@ -4,7 +4,6 @@ import torch
 from jacobian_torch import (
     compute_error_vector_jacobian, 
     forward_kinematics_T, 
-    extract_pose_from_T, 
     get_laser_tool_matrix,
     ERROR_WEIGHTS,
     quaternion_to_rotation_matrix,

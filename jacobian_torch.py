@@ -177,34 +177,34 @@ def forward_kinematics_T(q_deg_array, params_torch):
     T_base_tool = T_totle @ T_flange_tool
     return T_base_tool
 
-#! 从变换矩阵提取6维位姿向量
-def extract_pose_from_T(T):
-    position = T[0:3, 3]
-    R = T[0:3, 0:3]
+# #! 从变换矩阵提取6维位姿向量(舍弃)
+# def extract_pose_from_T(T):
+#     position = T[0:3, 3]
+#     R = T[0:3, 0:3]
    
-    # 计算sy和奇异性
-    sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
-    singular = sy < 1e-8
+#     # 计算sy和奇异性
+#     sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
+#     singular = sy < 1e-8
 
-    # 非奇异情况下计算
-    x1 = torch.atan2(R[2,1], R[2,2])
-    y = torch.atan2(-R[2,0], sy)
-    z1 = torch.atan2(R[1,0], R[0,0])
+#     # 非奇异情况下计算
+#     x1 = torch.atan2(R[2,1], R[2,2])
+#     y = torch.atan2(-R[2,0], sy)
+#     z1 = torch.atan2(R[1,0], R[0,0])
 
-    # 奇异情况备用公式
-    x2 = torch.atan2(-R[1,2], R[1,1])
-    z2 = torch.zeros_like(x1)
+#     # 奇异情况备用公式
+#     x2 = torch.atan2(-R[1,2], R[1,1])
+#     z2 = torch.zeros_like(x1)
 
-    # 选择结果并转度
-    x = torch.where(~singular, x1, x2)
-    z = torch.where(~singular, z1, z2)
-    rx = torch.rad2deg(x)
-    ry = torch.rad2deg(y)
-    rz = torch.rad2deg(z)
-    euler_angles_torch = torch.stack([rx, ry, rz])
+#     # 选择结果并转度
+#     x = torch.where(~singular, x1, x2)
+#     z = torch.where(~singular, z1, z2)
+#     rx = torch.rad2deg(x)
+#     ry = torch.rad2deg(y)
+#     rz = torch.rad2deg(z)
+#     euler_angles_torch = torch.stack([rx, ry, rz])
         
-    #* 连接位置和姿态
-    return torch.cat([position, euler_angles_torch])
+#     # 连接位置和姿态
+#     return torch.cat([position, euler_angles_torch])
 
 # 保存雅可比矩阵到 CSV
 def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv'):

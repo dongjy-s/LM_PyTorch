@@ -7,41 +7,17 @@ from jacobian_torch import (
     extract_pose_from_T, 
     get_laser_tool_matrix,
     ERROR_WEIGHTS,
-<<<<<<< HEAD
-    INITIAL_TCP_POSITION,
-    INITIAL_TCP_QUATERNION,
-    GLOBAL_DH_PARAMS
-=======
     quaternion_to_rotation_matrix,
     INIT_T_LASER_BASE_PARAMS,
     INIT_DH_PARAMS,
     JOINT_ANGLE_FILE,
     INIT_TOOL_OFFSET_POSITION,
     INIT_TOOL_OFFSET_QUATERNION
->>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 )
 
 
-<<<<<<< HEAD
-
-# #* 初始DH参数: theta_offset, alpha, d, a
-# GLOBAL_DH_PARAMS = [0, 0, 380, 0,
-#                     -90, -90, 0, 30,
-#                     0, 0, 0, 440,
-#                     0, -90, 435, 35,
-#                     0, 90, 0, 0,
-#                     180, -90, 83, 0]
-
-# #* 添加TCP参数的初始值 (来自 jacobian_torch.py)
-# INITIAL_TCP_POSITION = np.array([0.1, 1, 100])
-# INITIAL_TCP_QUATERNION = np.array([0.50, 0.50, 0.50, 0.50])
-
-#* 固定参数索引
-ALL_FIXED_INDICES = [0, 1, 2, 3, 5, 6, 9, 10, 13, 17, 18, 19, 20, 21, 22, 23] 
-=======
 #* 固定的参数
 ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
->>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
 
 #! 计算单组数据的误差向量
@@ -219,13 +195,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
-<<<<<<< HEAD
-                #* 四元数归一化 
-                if any(idx in opt_indices for idx in range(24, 31)):
-=======
                 #* TCP四元数归一化 
                 if any(idx in opt_indices for idx in range(27, 31)):
->>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
                     q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)
                     if norm_q_tcp > 1e-9: 

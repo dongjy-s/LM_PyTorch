@@ -18,8 +18,8 @@ from jacobian_torch import (
 #* 固定的参数
 ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
 
+#! 将旋转矩阵转换为四元数
 def _rotation_matrix_to_quaternion(R_matrix):
-    """Converts a 3x3 rotation matrix to a quaternion [qx, qy, qz, qw]."""
     if not torch.is_tensor(R_matrix):
         R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
 
@@ -58,8 +58,7 @@ def _rotation_matrix_to_quaternion(R_matrix):
     else: 
         q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
 
-    return q # [qx, qy, qz, qw]
-
+    return q 
 #! 计算单组数据的误差向量
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     #* 获取关节角度和参数
@@ -69,14 +68,14 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     #* 提取参数
     params_for_fk = params_t[0:31] 
     t_laser_base_pos = params_t[31:34]
-    t_laser_base_quat = params_t[34:38] # This is [qx, qy, qz, qw]
+    t_laser_base_quat = params_t[34:38] 
 
     #* 计算预测位姿（机器人基座坐标系下）
     T_pred_robot_base = forward_kinematics_T(q_t, params_for_fk) 
 
     #* 构建T_laser_base变换矩阵（基座在激光坐标系下的位姿）
-    R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat) # Assumes q_to_R expects [x,y,z,w] or [w,x,y,z] - check jacobian_torch
-                                                                    # Based on current code, it's [x,y,z,w]
+    R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat) 
+                                                                    
     T_laser_base_matrix = torch.eye(4, dtype=torch.float64)
     T_laser_base_matrix[0:3, 0:3] = R_laser_base
     T_laser_base_matrix[0:3, 3] = t_laser_base_pos
@@ -121,8 +120,6 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
     q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
 
-
-    current_q_err_vec = torch.stack([q_err_x, q_err_y, q_err_z])
     orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
     combined_error = torch.cat((pos_error, orient_error))
     return combined_error * torch.as_tensor(weights, dtype=torch.float64)

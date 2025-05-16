@@ -19,7 +19,6 @@ from jacobian_torch import (
 #* 固定的参数
 ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
 
-# Helper function to convert rotation matrix to quaternion
 def _rotation_matrix_to_quaternion(R_matrix):
     """Converts a 3x3 rotation matrix to a quaternion [qx, qy, qz, qw]."""
     if not torch.is_tensor(R_matrix):
@@ -29,7 +28,7 @@ def _rotation_matrix_to_quaternion(R_matrix):
     
     trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]
 
-    if trace > 1e-8: # Added epsilon for stability if trace is very near 0
+    if trace > 1e-8: 
         S = torch.sqrt(trace + 1.0) * 2.0 
         q[3] = 0.25 * S  # qw
         q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S # qx
@@ -53,12 +52,11 @@ def _rotation_matrix_to_quaternion(R_matrix):
         q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S # qx
         q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S # qy
         q[2] = 0.25 * S # qz
-    
-    # Normalize the quaternion
+   
     norm_q = torch.linalg.norm(q)
-    if norm_q > 1e-9: # Avoid division by zero if norm is too small
+    if norm_q > 1e-9: 
         q = q / norm_q
-    else: # Should not happen with valid rotation matrix, but as a safeguard
+    else: 
         q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
 
     return q # [qx, qy, qz, qw]
@@ -478,11 +476,11 @@ if __name__ == '__main__':
     # # 评估优化效果
     # evaluate_optimization(initial_params, final_optimized_params) 
 
-    # # 保存优化结果 (使用交替优化的结果)
-    # save_optimization_results(optimized_params) 
+    # 保存优化结果 (使用交替优化的结果)
+    save_optimization_results(optimized_params) 
 
-    # # 评估优化效果 (使用交替优化的结果)
-    # evaluate_optimization(initial_params, optimized_params)
+    # 评估优化效果 (使用交替优化的结果)
+    evaluate_optimization(initial_params, optimized_params)
     
     # 输出优化前后的参数对比
     print("\n" + "="*70)

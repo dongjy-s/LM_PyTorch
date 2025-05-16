@@ -117,6 +117,50 @@ def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
     MDH_matrix[3, 3] = 1.0 # 确保为浮点数，尽管dtype已指定
     return MDH_matrix
 
+#! 旋转矩阵转四元数 (从 lm_optimize_pytorch.py 借鉴)
+def _rotation_matrix_to_quaternion(R_matrix):
+    """Converts a 3x3 rotation matrix to a quaternion [qx, qy, qz, qw]."""
+    if not torch.is_tensor(R_matrix):
+        R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
+
+    q = torch.zeros(4, dtype=R_matrix.dtype, device=R_matrix.device)
+    
+    trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]
+
+    if trace > 1e-8: 
+        S = torch.sqrt(trace + 1.0) * 2.0 
+        q[3] = 0.25 * S  # qw
+        q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S # qx
+        q[1] = (R_matrix[0,2] - R_matrix[2,0]) / S # qy
+        q[2] = (R_matrix[1,0] - R_matrix[0,1]) / S # qz
+    elif (R_matrix[0,0] > R_matrix[1,1]) and (R_matrix[0,0] > R_matrix[2,2]):
+        S = torch.sqrt(1.0 + R_matrix[0,0] - R_matrix[1,1] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[2,1] - R_matrix[1,2]) / S # qw
+        q[0] = 0.25 * S # qx
+        q[1] = (R_matrix[0,1] + R_matrix[1,0]) / S # qy
+        q[2] = (R_matrix[0,2] + R_matrix[2,0]) / S # qz
+    elif R_matrix[1,1] > R_matrix[2,2]:
+        S = torch.sqrt(1.0 + R_matrix[1,1] - R_matrix[0,0] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[0,2] - R_matrix[2,0]) / S # qw
+        q[0] = (R_matrix[0,1] + R_matrix[1,0]) / S # qx
+        q[1] = 0.25 * S # qy
+        q[2] = (R_matrix[1,2] + R_matrix[2,1]) / S # qz
+    else:
+        S = torch.sqrt(1.0 + R_matrix[2,2] - R_matrix[0,0] - R_matrix[1,1] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[1,0] - R_matrix[0,1]) / S # qw
+        q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S # qx
+        q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S # qy
+        q[2] = 0.25 * S # qz
+   
+    norm_q = torch.linalg.norm(q)
+    if norm_q > 1e-9: 
+        q = q / norm_q
+    else: 
+        # 如果模长接近零，返回一个表示无旋转的单位四元数 [0,0,0,1]
+        q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
+
+    return q # [qx, qy, qz, qw]
+
 #! 四元数转旋转矩阵
 def quaternion_to_rotation_matrix(q):
     x, y, z, w = q
@@ -224,15 +268,54 @@ def compute_average_weighted_error(joint_angles_all_frames_np,
             
         current_joint_angles_torch = torch.as_tensor(joint_angles_all_frames_np[frame_idx], dtype=torch.float64, device=fk_params_torch.device)
         
+        # 机器人基座坐标系下的预测工具位姿变换矩阵
         T_pred_robot_base_torch = forward_kinematics_T(current_joint_angles_torch, fk_params_torch)
+        # 将机器人预测位姿转换到激光跟踪仪坐标系
         T_pred_in_laser_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
-        pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_torch) # 6D pose
         
+        # 测量的工具位姿变换矩阵 (在激光跟踪仪坐标系下)
         T_measured_this_frame_torch = torch.as_tensor(measured_T_matrices_all_frames_np[frame_idx], dtype=torch.float64, device=fk_params_torch.device)
-        pose_measured_in_laser = extract_pose_from_T(T_measured_this_frame_torch) # 6D pose
 
-        # 计算原始6D误差向量
-        error_vector_original = pose_pred_in_laser - pose_measured_in_laser
+        # --- 开始修改：使用基于四元数的误差计算 --- 
+        # 1. 提取预测的位置和旋转矩阵
+        pred_pos = T_pred_in_laser_torch[0:3, 3]
+        pred_R = T_pred_in_laser_torch[0:3, 0:3]
+
+        # 2. 提取测量的位置和旋转矩阵
+        meas_pos = T_measured_this_frame_torch[0:3, 3]
+        meas_R = T_measured_this_frame_torch[0:3, 0:3]
+
+        # 3. 位置误差
+        pos_error = pred_pos - meas_pos
+
+        # 4. 将旋转矩阵转换为四元数 [qx, qy, qz, qw]
+        q_pred = _rotation_matrix_to_quaternion(pred_R) 
+        q_meas = _rotation_matrix_to_quaternion(meas_R)
+
+        # 5. 使用四元数计算旋转误差 (q_err = q_pred * q_meas_conjugate)
+        # 计算 q_meas 的共轭 q_meas_conj = [-qx, -qy, -qz, qw]
+        q_meas_conj_x = -q_meas[0]
+        q_meas_conj_y = -q_meas[1]
+        q_meas_conj_z = -q_meas[2]
+        q_meas_conj_w =  q_meas[3]
+        
+        # 四元数乘法: q_pred * q_meas_conj
+        # q_pred = [x1, y1, z1, w1], q_meas_conj = [x2, y2, z2, w2]
+        # qw = w1*w2 - x1*x2 - y1*y2 - z1*z2
+        # qx = w1*x2 + x1*w2 + y1*z2 - z1*y2
+        # qy = w1*y2 - x1*z2 + y1*w2 + z1*x2
+        # qz = w1*z2 + x1*y2 - y1*x2 + z1*w2
+        q_err_w = q_pred[3] * q_meas_conj_w - q_pred[0] * q_meas_conj_x - q_pred[1] * q_meas_conj_y - q_pred[2] * q_meas_conj_z
+        q_err_x = q_pred[3] * q_meas_conj_x + q_pred[0] * q_meas_conj_w + q_pred[1] * q_meas_conj_z - q_pred[2] * q_meas_conj_y
+        q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
+        q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
+
+        # 旋转误差向量 (通常取误差四元数的向量部分)
+        orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
+        
+        # 组合位置和旋转误差
+        error_vector_original = torch.cat((pos_error, orient_error))
+        # --- 结束修改 --- 
         
         # 应用权重
         weighted_error_vector = error_vector_original * ERROR_WEIGHTS_torch

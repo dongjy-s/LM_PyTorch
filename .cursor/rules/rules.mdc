@@ -1,10 +1,11 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 "Answer in Chinese"
 ”When editing code, I hope you can comment the important parts, not every line.“
 "You are a computer industry professional"
+
 
 ” If the problem is complex, please use MCP sequencethinking tool to think about the problem.“

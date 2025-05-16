@@ -14,52 +14,48 @@ from jacobian_torch import (
     INIT_TOOL_OFFSET_QUATERNION
 )
 
-
-#* 固定的参数
-ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
+#* 固定的参数索引(为空则是全优化)
+ALL_FIXED_INDICES = [] 
 
 #! 将旋转矩阵转换为四元数
 def _rotation_matrix_to_quaternion(R_matrix):
     if not torch.is_tensor(R_matrix):
         R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
-
     q = torch.zeros(4, dtype=R_matrix.dtype, device=R_matrix.device)
-    
-    trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]
-
+    trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]   
     if trace > 1e-8: 
         S = torch.sqrt(trace + 1.0) * 2.0 
-        q[3] = 0.25 * S  # qw
-        q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S # qx
-        q[1] = (R_matrix[0,2] - R_matrix[2,0]) / S # qy
-        q[2] = (R_matrix[1,0] - R_matrix[0,1]) / S # qz
+        q[3] = 0.25 * S  
+        q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S 
+        q[1] = (R_matrix[0,2] - R_matrix[2,0]) / S 
+        q[2] = (R_matrix[1,0] - R_matrix[0,1]) / S 
     elif (R_matrix[0,0] > R_matrix[1,1]) and (R_matrix[0,0] > R_matrix[2,2]):
-        S = torch.sqrt(1.0 + R_matrix[0,0] - R_matrix[1,1] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
-        q[3] = (R_matrix[2,1] - R_matrix[1,2]) / S # qw
+        S = torch.sqrt(1.0 + R_matrix[0,0] - R_matrix[1,1] - R_matrix[2,2] + 1e-12) * 2.0 
         q[0] = 0.25 * S # qx
-        q[1] = (R_matrix[0,1] + R_matrix[1,0]) / S # qy
-        q[2] = (R_matrix[0,2] + R_matrix[2,0]) / S # qz
+        q[1] = (R_matrix[0,1] + R_matrix[1,0]) / S 
+        q[2] = (R_matrix[0,2] + R_matrix[2,0]) / S 
     elif R_matrix[1,1] > R_matrix[2,2]:
-        S = torch.sqrt(1.0 + R_matrix[1,1] - R_matrix[0,0] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
-        q[3] = (R_matrix[0,2] - R_matrix[2,0]) / S # qw
-        q[0] = (R_matrix[0,1] + R_matrix[1,0]) / S # qx
-        q[1] = 0.25 * S # qy
-        q[2] = (R_matrix[1,2] + R_matrix[2,1]) / S # qz
+        S = torch.sqrt(1.0 + R_matrix[1,1] - R_matrix[0,0] - R_matrix[2,2] + 1e-12) * 2.0 
+        q[3] = (R_matrix[0,2] - R_matrix[2,0]) / S 
+        q[0] = (R_matrix[0,1] + R_matrix[1,0]) / S 
+        q[1] = 0.25 * S 
+        q[2] = (R_matrix[1,2] + R_matrix[2,1]) / S 
     else:
-        S = torch.sqrt(1.0 + R_matrix[2,2] - R_matrix[0,0] - R_matrix[1,1] + 1e-12) * 2.0 # Added small epsilon
-        q[3] = (R_matrix[1,0] - R_matrix[0,1]) / S # qw
-        q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S # qx
-        q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S # qy
-        q[2] = 0.25 * S # qz
-   
+        S = torch.sqrt(1.0 + R_matrix[2,2] - R_matrix[0,0] - R_matrix[1,1] + 1e-12) * 2.0 
+        q[3] = (R_matrix[1,0] - R_matrix[0,1]) / S 
+        q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S 
+        q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S 
+        q[2] = 0.25 * S 
+
+    #* 归一化四元数
     norm_q = torch.linalg.norm(q)
     if norm_q > 1e-9: 
         q = q / norm_q
     else: 
         q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
-
     return q 
-#! 计算单组数据的误差向量
+
+#! 计算单组数据的误差向量（加权重）
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
     #* 获取关节角度和参数
     q_t = torch.as_tensor(joint_angles, dtype=torch.float64)
@@ -70,12 +66,11 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     t_laser_base_pos = params_t[31:34]
     t_laser_base_quat = params_t[34:38] 
 
-    #* 计算预测位姿（机器人基座坐标系下）
+  
     T_pred_robot_base = forward_kinematics_T(q_t, params_for_fk) 
 
     #* 构建T_laser_base变换矩阵（基座在激光坐标系下的位姿）
     R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat) 
-                                                                    
     T_laser_base_matrix = torch.eye(4, dtype=torch.float64)
     T_laser_base_matrix[0:3, 0:3] = R_laser_base
     T_laser_base_matrix[0:3, 3] = t_laser_base_pos
@@ -83,26 +78,23 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     #* 将机器人预测位姿转换到激光跟踪仪坐标系
     T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
     
-    # 计算激光跟踪仪-基座变换矩阵
-
+    #* 计算激光跟踪仪-基座变换矩阵
     pred_pos = T_pred_in_laser_frame[0:3, 3]
     pred_R = T_pred_in_laser_frame[0:3, 0:3]
 
-    # 2. 提取测量位置和旋转矩阵
+    #* 提取测量位置和旋转矩阵
     T_laser_t = torch.as_tensor(laser_matrix, dtype=torch.float64)
     meas_pos = T_laser_t[0:3, 3]
     meas_R = T_laser_t[0:3, 0:3]
 
-    # 3. 位置误差
+    #* 位置误差
     pos_error = pred_pos - meas_pos
 
-    # 4. 将旋转矩阵转换为四元数 [qx, qy, qz, qw]
+    #* 将旋转矩阵转换为四元数 [qx, qy, qz, qw]
     q_pred = _rotation_matrix_to_quaternion(pred_R) 
     q_meas = _rotation_matrix_to_quaternion(meas_R) 
 
-    # 5. 使用四元数计算旋转误差
-    # q_err = q_pred * q_meas_conjugate
-
+    #* 计算四元数共轭
     q_meas_conj_x = -q_meas[0]
     q_meas_conj_y = -q_meas[1]
     q_meas_conj_z = -q_meas[2]
@@ -114,18 +106,19 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     # qx = w1*x2 + x1*w2 + y1*z2 - z1*y2
     # qy = w1*y2 - x1*z2 + y1*w2 + z1*x2
     # qz = w1*z2 + x1*y2 - y1*x2 + z1*w2
-    
+    #* 计算预测和实际之间的误差旋转
     q_err_w = q_pred[3] * q_meas_conj_w - q_pred[0] * q_meas_conj_x - q_pred[1] * q_meas_conj_y - q_pred[2] * q_meas_conj_z
     q_err_x = q_pred[3] * q_meas_conj_x + q_pred[0] * q_meas_conj_w + q_pred[1] * q_meas_conj_z - q_pred[2] * q_meas_conj_y
     q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
     q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
 
+    #* 计算误差旋转
     orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
     combined_error = torch.cat((pos_error, orient_error))
     return combined_error * torch.as_tensor(weights, dtype=torch.float64)
 
 
-#! 计算所有样本的总误差（2-范数）
+#! 计算所有样本的平均误差平方和
 def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
     total_error_sum_sq = 0.0 
     n_samples = len(joint_angles)
@@ -136,7 +129,7 @@ def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_
         error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i], weights) 
         total_error_sum_sq += torch.sum(error_vec**2)
     
-    #* 返回平均误差 (RMS误差) 公式：RMS = sqrt(sum(error_vec^2) / n_samples)
+    #* 返回均方根误差 (RMSE误差) 公式：RMSE = sqrt(sum(error_vec^2) / n_samples)
     mean_squared_error = total_error_sum_sq / n_samples
     return torch.sqrt(mean_squared_error)
 
@@ -145,12 +138,9 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
     dirpath = os.path.dirname(filepath_prefix)
     if dirpath and not os.path.exists(dirpath):
         os.makedirs(dirpath)
-
     dh_params = params[0:24]
     tcp_params = params[24:31]
     t_laser_base_params = params[31:38]
-    
-    # 保存DH参数
     dh_filepath = f"{filepath_prefix}_dh_parameters.csv"
     dh_matrix = np.array(dh_params).reshape(6, 4)
     header_dh = "alpha,a,d,theta_offset"
@@ -158,7 +148,7 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
     with open(dh_filepath, 'w') as f:
         f.write(f",{header_dh}\n")  
         for i, row in enumerate(dh_matrix):
-            f.write(f"{row_labels_dh[i]},{row[1]:.6f},{row[3]:.6f},{row[2]:.6f},{row[0]:.6f}\n")
+            f.write(f"{row_labels_dh[i]},{row[0]:.6f},{row[1]:.6f},{row[2]:.6f},{row[3]:.6f}\n")
     print(f"优化后的DH参数已保存到: {dh_filepath}")
     
     # 保存TCP参数
@@ -185,9 +175,9 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
 #! LM优化
 def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None):
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
+    #* 初始化阻尼因子
     lambda_val = lambda_init
-    
-    #* 读取所有数据
+    #* 读取关节角度和激光数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
@@ -195,9 +185,9 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
         print("错误: 无法加载关节角度或激光数据，样本数量为0。")
         return initial_params 
     
-    #* 记录初始平均误差
+    #* 记录初始均方根误差
     current_avg_error = compute_total_error_avg(params, joint_angles, laser_matrices) 
-    print(f"初始平均误差：{current_avg_error.item():.6f}")
+    print(f"初始均方根误差：{current_avg_error.item():.6f}")
     avg_initial_error = current_avg_error.item() 
     
     #* 处理可优化参数索引
@@ -245,14 +235,14 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                     return params.numpy()
                 continue
 
-            # 尝试更新
+            #* 尝试更新
             params_new = params.clone()
             params_new[opt_indices] += delta
             
-            # 计算新误差
+            #* 计算新误差
             new_avg_error = compute_total_error_avg(params_new, joint_angles, laser_matrices)
             
-            # 判断是否接受更新
+            #* 如果新的均方误差小于当前均方误差，则接受更新
             if new_avg_error < current_avg_error:
                 params = params_new
                 current_avg_error = new_avg_error
@@ -279,29 +269,26 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         params[34:38] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: 激光跟踪仪-基座四元数模长接近于零，已重置为[0,0,0,1]")
 
-                print(f"迭代 {iteration+1}: 平均误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
+                print(f"迭代 {iteration+1}: 均方根误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
             else:
                 lambda_val *= 10
                 print(f"拒绝更新，增大阻尼因子 λ = {lambda_val}")
-                
-                # 如果阻尼因子过大，可能表明已经接近局部最小值
-                if lambda_val > 1e8:
-                    print("阻尼因子过大，停止当前迭代")
-                    break
-                # 如果阻尼因子超过一定阈值，提前结束优化
+
+                #* 如果阻尼因子超过一定阈值，提前结束优化
                 if lambda_val > 1e5:
                     print(f"阻尼因子超过阈值 1e5，提前结束优化")
                     return params.numpy()
-        
         if not update_success:
             print("内部迭代未收敛，继续主循环")
-        # 检查收敛，仅在成功更新(delta已定义)时进行
+  
         if update_success and torch.norm(delta) < tol:
             print(f"参数变化小于阈值 {tol}，在第 {iteration+1} 次迭代后收敛")
             break
-    final_avg_error = current_avg_error.item() # 使用平均误差
-    improvement = (avg_initial_error - final_avg_error) / avg_initial_error * 100 if avg_initial_error > 1e-9 else 0 # avg_initial_error 已经在前面定义为平均误差
-    print(f"优化完成，初始平均误差: {avg_initial_error:.6f}, 最终平均误差: {final_avg_error:.6f}, 改进率: {improvement:.2f}%")
+
+    #* 最终均方根误差
+    final_avg_error = current_avg_error.item() 
+    improvement = (avg_initial_error - final_avg_error) / avg_initial_error * 100 if avg_initial_error > 1e-9 else 0 
+    print(f"优化完成，初始均方根误差: {avg_initial_error:.6f}, 最终均方根误差: {final_avg_error:.6f}, 改进率: {improvement:.2f}%")
     return params.numpy()
 
 #! 交替优化函数
@@ -311,7 +298,7 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     print(" "*20 + "开始交替优化")
     print("="*60)
     
-    # 读取数据
+    #* 读取关节角度和激光数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
     
@@ -324,13 +311,13 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     opt_indices_group1 = [idx for idx in all_indices_group1 if idx not in ALL_FIXED_INDICES]
     opt_indices_group2 = [idx for idx in all_indices_group2 if idx not in ALL_FIXED_INDICES]
     
-    #! 初始化参数和误差
+    #! 初始化均方根误差
     params = np.array(initial_params)
     current_avg_error_val = compute_total_error_avg(params, joint_angles, laser_matrices).item() # 已修改为计算平均误差, 使用 .item() 获取数值
-    avg_initial_error_alternate = current_avg_error_val #! 为交替优化的初始误差单独命名
-    print(f"初始平均误差: {avg_initial_error_alternate:.6f}")
+    avg_initial_error_alternate = current_avg_error_val 
+    print(f"初始均方根误差: {avg_initial_error_alternate:.6f}")
     
-    # 打印参数组信息
+    #* 打印参数组信息
     print(f"第一组参数索引 (共{len(opt_indices_group1)}个): {opt_indices_group1}")
     print(f"第二组参数索引 (共{len(opt_indices_group2)}个): {opt_indices_group2}")
     
@@ -350,9 +337,9 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
             opt_indices=opt_indices_group1
         )
         
-        # 计算第一步优化后的误差
-        avg_error_step1 = compute_total_error_avg(params_step1, joint_angles, laser_matrices).item() # 已修改为计算平均误差
-        print(f"第一步后平均误差: {avg_error_step1:.6f}")
+        #* 计算第一步优化后的误差    
+        avg_error_step1 = compute_total_error_avg(params_step1, joint_angles, laser_matrices).item() 
+        print(f"第一步后均方根误差: {avg_error_step1:.6f}")
         
         #! 第二步：优化激光四元数，固定DH参数+TCP+激光XYZ
         print("\n----- 第二步：优化激光四元数 -----")
@@ -363,40 +350,39 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
             opt_indices=opt_indices_group2
         )
         
-        # 计算第二步优化后的误差
-        avg_error_step2 = compute_total_error_avg(params_step2, joint_angles, laser_matrices).item() # 已修改为计算平均误差
-        print(f"第二步后平均误差: {avg_error_step2:.6f}")
+        #* 计算第二步优化后的误差
+        avg_error_step2 = compute_total_error_avg(params_step2, joint_angles, laser_matrices).item() 
+        print(f"第二步后均方根误差: {avg_error_step2:.6f}")
         
-        # 更新参数和误差
+        #* 更新误差
         params = params_step2
-        error_history_avg.append(avg_error_step2) # 添加平均误差
+        error_history_avg.append(avg_error_step2) 
         
-        # 计算误差改进量
-        error_improvement = error_history_avg[-2] - error_history_avg[-1] # 基于平均误差计算
+        #* 计算误差改进量
+        error_improvement = error_history_avg[-2] - error_history_avg[-1] 
         relative_improvement = error_improvement / error_history_avg[-2] if error_history_avg[-2] > 1e-9 else 0
         
         print(f"\n本次循环误差改进: {error_improvement:.6f}, 相对改进: {relative_improvement*100:.4f}%")
         
-        # 检查收敛条件
         if error_improvement < convergence_tol:
             print(f"\n误差改进 {error_improvement:.6f} 小于阈值 {convergence_tol}，交替优化收敛")
             break
             
-    # 计算总体优化效果
-    final_avg_error_alternate = error_history_avg[-1] # 使用平均误差
+    #* 计算总体优化效果
+    final_avg_error_alternate = error_history_avg[-1] 
     total_improvement = (avg_initial_error_alternate - final_avg_error_alternate) / avg_initial_error_alternate * 100 if avg_initial_error_alternate > 1e-9 else 0
     
     print("\n" + "="*60)
     print(f"交替优化完成，共进行了 {alt_iteration + 1} 次循环")
-    print(f"初始平均误差: {avg_initial_error_alternate:.6f}") 
-    print(f"最终平均误差: {final_avg_error_alternate:.6f}")
+    print(f"初始均方根误差: {avg_initial_error_alternate:.6f}") 
+    print(f"最终均方根误差: {final_avg_error_alternate:.6f}")
     print(f"总体改进率: {total_improvement:.2f}%")
     print("="*60)
     
     return params
 
 def evaluate_optimization(initial_params, optimized_params):
-    """评估优化效果，报告与优化器目标一致的RMSE"""
+    """评估优化效果，报告与优化器目标一致的均方根误差"""
     # 读取数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
@@ -406,14 +392,14 @@ def evaluate_optimization(initial_params, optimized_params):
         print("评估警告: 样本数量为0，无法进行评估。")
         return
     
-    print("\n" + "="*60) # 调整分隔线长度以适应新的表头
-    print(" "*15 + "优化效果评估 (所有分量的RMSE)") # 修改标题
+    print("\n" + "="*60) # 调整分隔线长度以适应新的表头 
+    print(" "*15 + "优化效果评估 (所有分量的均方根误差)") # 修改标题
     print("="*60)
-    # 打印表头，明确指出总体平均误差是RMSE
+    # 打印表头，明确指出总体平均误差是均方根误差
     print(f"{'姿态(帧)':^12}|{'初始单帧范数':^18}|{'优化后单帧范数':^20}|{'单帧改进率':^15}")
     print("-"*68) # 调整分隔线长度
     
-    # 计算初始和优化后的总体RMSE (与compute_total_error_avg一致)
+    # 计算初始和优化后的总体均方根误差 (与compute_total_error_avg一致)
     initial_total_rmse = compute_total_error_avg(initial_params, joint_angles, laser_matrices).item()
     optimized_total_rmse = compute_total_error_avg(optimized_params, joint_angles, laser_matrices).item()
 
@@ -429,7 +415,7 @@ def evaluate_optimization(initial_params, optimized_params):
         
         print(f"{i+1:^12}|{initial_frame_norm:^18.6f}|{optimized_frame_norm:^20.6f}|{frame_improvement:^14.2f}%")
     
-    # 计算总体改进率 (基于RMSE)
+    # 计算总体改进率 (基于均方根误差)
     avg_improvement_rmse = (1 - optimized_total_rmse / initial_total_rmse) * 100 if initial_total_rmse > 1e-9 else 0
     
     print("-"*68) # 调整分隔线长度
@@ -456,26 +442,11 @@ if __name__ == '__main__':
         lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
         lambda_init_group2=0.01   # 第二组参数初始阻尼因子
     )
-    
-    # # 最终微调（使用交替优化结果作为初始值进行一次整体优化）
-    # print("\n进行最终微调优化...")
-    # final_optimized_params = optimize_dh_parameters(
-    #     optimized_params, 
-    #     max_iterations=20, 
-    #     lambda_init=0.001, 
-    #     opt_indices=opt_indices
-    # )
-    
-    # # 保存最终优化结果
-    # save_optimization_results(final_optimized_params) 
-    
-    # # 评估优化效果
-    # evaluate_optimization(initial_params, final_optimized_params) 
 
-    # 保存优化结果 (使用交替优化的结果)
+    # 保存优化结果 
     save_optimization_results(optimized_params) 
 
-    # 评估优化效果 (使用交替优化的结果)
+    # 评估优化效果 
     evaluate_optimization(initial_params, optimized_params)
     
     # 输出优化前后的参数对比
@@ -485,7 +456,7 @@ if __name__ == '__main__':
     print(f"{'关节':^6}|{'参数':^12}|{'初始值':^15}|{'优化值':^15}|{'差异':^15}|{'状态':^10}")
     print("-"*70)
     
-    param_names = ["theta_offset", "alpha", "d", "a"]
+    param_names = ["alpha", "a", "d", "theta_offset"]
     
     # 将参数重构为6×4矩阵，方便查看 (DH部分)
     init_dh_matrix = initial_params[0:24].reshape(6, 4)

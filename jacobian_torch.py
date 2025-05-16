@@ -5,56 +5,42 @@ import torch.autograd.functional as F
 from scipy.spatial.transform import Rotation
 import pandas as pd
 
-#! 常量定义
-JOINT_ANGLE_FILE = 'data/joint_angle.csv'
-LASER_POS_FILE = 'data/laser_pos.csv'
+#! 关节角度数据文件
+JOINT_ANGLE_FILE = 'data/extracted_joint_angles.csv'
+
+#! 激光跟踪仪测量数据文件
+LASER_POS_FILE = 'data/extracted_laser_positions.csv'
+
+#! 误差权重
 ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
-#! 待优化的DH参数: theta_offset, alpha, d, a 单位:mm,度
-#* 出厂DH参数
+#! 待优化的DH参数: alpha, a, d, theta_offset 单位:mm,度
 INIT_DH_PARAMS = [
-    0, 0, 487, 0,
-    -90, -90, 0, 85,
-    0, 0, 0, 640,
-    0, -90, 720, 205,
-    0, 90, 0, 0,
-    180, -90, 75, 0
+    0, 0, 285.5, 0,
+    -90, 0, 0, -90,
+    180, 760, 0, -90,
+    -90, 0, 540, 0,
+    90, 0, 150, 0,
+    -90, 0, 127, 0
 ]
-
-#* 激光优化的DH参数
-# INIT_DH_PARAMS = [
-#     -0.0063, 0, 487.4009, 0,
-#     -90.2267, -90, 0, 85.5599 ,
-#     -0.4689, 0, 0, 639.8143,
-#     0.5631, -90, 720.3035, 205.288 ,
-#     0.0723, 90, 0, 0,
-#     179.6983, -90, 75.7785, 0
-# ]
 
 #! 关节限位(度)
 JOINT_LIMITS = np.array([
-    [-100, 100],
-    [-90, 100],
-    [-100, 600],
-    [-100, 100],
-    [-90, 90],
-    [-120, 120]
+    [-175, 175],
+    [-110, 110],
+    [-135, 135],
+    [-175, 175],
+    [-115, 115],
+    [-175, 175]
 ])
-
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([0.358847, 1.122166, 239.049308])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.495978, 0.502933, 0.505128, 0.495893])
+INIT_TOOL_OFFSET_POSITION = np.array([2.001192, -0.428111, 96.764181])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.706866, 0.000468, -0.003425, 0.707339])
 
-#* 激光拟合的TCP参数
-# INIT_TOOL_OFFSET_POSITION = np.array([0.1731, 1.1801, 238.3535])
-# INIT_TOOL_OFFSET_QUATERNION = np.array([0.4961, 0.5031, 0.505, 0.4957])
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
+INIT_T_LASER_BASE_PARAMS = np.array([2485.338605, 2913.227368, 36.016355, 0.001320, 0.001561, -0.591506, 0.806298])
 
-INIT_T_LASER_BASE_PARAMS = np.array([3620.958147, 3310.410282, 14.585847, 0.001232, -0.005573, 0.787133, -0.616757])
-#*激光拟合的基座参数
-# INIT_T_LASER_BASE_PARAMS = np.array([3610.831933, 3300.7233, 13.6472, 0.0014, -0.0055, 0.7873, -0.6166])
-
-#! 激光跟踪仪测量的位姿转换为变换矩阵
+#! 把激光跟踪仪测量的位姿转换为 4 * 4 变换矩阵
 def get_laser_tool_matrix():
     laser_data = pd.read_csv(LASER_POS_FILE, delimiter=',', skiprows=1, header=None).values
     num_samples = laser_data.shape[0]
@@ -110,7 +96,7 @@ def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
     MDH_matrix[3, 3] = 1
     return MDH_matrix
 
-#! 四元数转旋转矩阵
+#! 把四元数转换为旋转矩阵
 def quaternion_to_rotation_matrix(q):
     """
         四元数和旋转矩阵变换公式：
@@ -156,12 +142,15 @@ def forward_kinematics_T(q_deg_array, params_torch):
     #* 计算基座到末端法兰的变换
     T_totle = torch.eye(4, dtype=torch.float64)
     num_joints = 6
+    #* 提取关节DH参数
     for i in range(num_joints):
         base_idx = i * 4
-        theta_offset_i = dh_params[base_idx]    
-        alpha_i_deg    = dh_params[base_idx + 1] 
-        d_i            = dh_params[base_idx + 2] 
-        a_i            = dh_params[base_idx + 3] 
+        alpha_i_deg    = dh_params[base_idx]
+        a_i            = dh_params[base_idx + 1]
+        d_i            = dh_params[base_idx + 2]
+        theta_offset_i = dh_params[base_idx + 3]
+
+        #* 计算该关节角度下变换矩阵
         q_i_deg = q_deg_array[i]
         actual_theta_deg = q_i_deg + theta_offset_i
         actual_theta_rad = torch.deg2rad(actual_theta_deg)
@@ -176,37 +165,37 @@ def forward_kinematics_T(q_deg_array, params_torch):
     T_flange_tool[0:3, 0:3] = R_tool
     T_base_tool = T_totle @ T_flange_tool
     return T_base_tool
-
-# #! 从变换矩阵提取6维位姿向量(舍弃)
-# def extract_pose_from_T(T):
-#     position = T[0:3, 3]
-#     R = T[0:3, 0:3]
+    
+#! 从变换矩阵提取6维位姿向量
+def extract_pose_from_T(T):
+    position = T[0:3, 3]
+    R = T[0:3, 0:3]
    
-#     # 计算sy和奇异性
-#     sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
-#     singular = sy < 1e-8
+    # 计算sy和奇异性
+    sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
+    singular = sy < 1e-8
 
-#     # 非奇异情况下计算
-#     x1 = torch.atan2(R[2,1], R[2,2])
-#     y = torch.atan2(-R[2,0], sy)
-#     z1 = torch.atan2(R[1,0], R[0,0])
+    # 非奇异情况下计算
+    x1 = torch.atan2(R[2,1], R[2,2])
+    y = torch.atan2(-R[2,0], sy)
+    z1 = torch.atan2(R[1,0], R[0,0])
 
-#     # 奇异情况备用公式
-#     x2 = torch.atan2(-R[1,2], R[1,1])
-#     z2 = torch.zeros_like(x1)
+    # 奇异情况备用公式
+    x2 = torch.atan2(-R[1,2], R[1,1])
+    z2 = torch.zeros_like(x1)
 
-#     # 选择结果并转度
-#     x = torch.where(~singular, x1, x2)
-#     z = torch.where(~singular, z1, z2)
-#     rx = torch.rad2deg(x)
-#     ry = torch.rad2deg(y)
-#     rz = torch.rad2deg(z)
-#     euler_angles_torch = torch.stack([rx, ry, rz])
+    # 选择结果并转度
+    x = torch.where(~singular, x1, x2)
+    z = torch.where(~singular, z1, z2)
+    rx = torch.rad2deg(x)
+    ry = torch.rad2deg(y)
+    rz = torch.rad2deg(z)
+    euler_angles_torch = torch.stack([rx, ry, rz])
         
-#     # 连接位置和姿态
-#     return torch.cat([position, euler_angles_torch])
+    # 连接位置和姿态
+    return torch.cat([position, euler_angles_torch])
 
-# 保存雅可比矩阵到 CSV
+#! 保存雅可比矩阵
 def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv'):
     jacobian_np = jacobian_tensor.detach().numpy()
     dirpath = os.path.dirname(filepath)
@@ -215,9 +204,9 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv
     np.savetxt(filepath, jacobian_np, delimiter=',', fmt='%.12f')
     print(f"雅可比矩阵已保存到: {filepath}")
 
-#! 计算误差向量对组合参数的雅可比
+#! 计算误差向量和优化参数之间的雅可比矩阵
 def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
-    """计算单组数据的误差向量对 组合参数 (DH+TCP+T_laser_base) 的雅可比矩阵"""
+
     #* 转为 torch 张量
     params_torch = torch.tensor(params, dtype=torch.float64, requires_grad=True)
     q_torch = torch.as_tensor(joint_angles, dtype=torch.float64)
@@ -240,60 +229,53 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
         T_laser_base_matrix[0:3, 0:3] = R_laser_base
         T_laser_base_matrix[0:3, 3] = t_laser_base_pos
         
-        #* 3. 将机器人预测位姿转换到激光跟踪仪坐标系 
+        #* 3. 将DH参数计算的位姿转换到激光跟踪仪坐标系 
         T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
 
         #* 4. 从变换矩阵提取位姿向量
         pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_frame)
-        pose_measured_in_laser = extract_pose_from_T(T_laser_tool_measured_torch) # Measured data is already in laser frame
+        pose_measured_in_laser = extract_pose_from_T(T_laser_tool_measured_torch) 
         #! 六维误差向量
         return (pose_pred_in_laser - pose_measured_in_laser) * weights_torch
 
     #* 计算并返回雅可比矩阵 (维度应为 6x38)
-    J = F.jacobian(err_vec_fn, params_torch) # 针对组合参数计算
+    J = F.jacobian(err_vec_fn, params_torch) 
     return J
 
+#! 测试
 if __name__ == '__main__':
-    
     initial_params_np = np.concatenate((
         INIT_DH_PARAMS, 
         INIT_TOOL_OFFSET_POSITION, 
         INIT_TOOL_OFFSET_QUATERNION,
         INIT_T_LASER_BASE_PARAMS 
     ))
-    # 将初始参数转换为PyTorch张量以用于后续计算
     initial_params_torch = torch.tensor(initial_params_np, dtype=torch.float64)
-
-    # 加载所有关节角度
     all_joint_angles_np = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    # 获取激光跟踪仪测量的所有工具位姿矩阵 (虽然在这个测试中我们主要用预测的)
     all_T_laser_tool_measured_np = get_laser_tool_matrix()
 
-    print("--- 雅可比矩阵计算（第一帧） ---")
+    #* 计算雅可比矩阵
+    print("--- 雅可比矩阵计算（第一组） ---")
     jacobian = compute_error_vector_jacobian(initial_params_np, all_joint_angles_np[0], all_T_laser_tool_measured_np[0], ERROR_WEIGHTS)
     save_jacobian_to_csv(jacobian)
-    print("雅可比矩阵已保存（第一帧）。")
-    print("\n--- 预测工具位姿在激光坐标系下（前5组关节角） ---")
+    print("雅可比矩阵已保存（第一组）。")
 
-    # 提取用于正向运动学的参数 (DH + TCP)
+    #* 预测工具位姿在激光坐标系下
+    print("\n--- 预测工具位姿在激光坐标系下（前5组关节角） ---")
     params_for_fk_torch = initial_params_torch[0:31]
-    # 提取用于构建T_laser_base的参数
     t_laser_base_pos_torch = initial_params_torch[31:34]
     t_laser_base_quat_torch = initial_params_torch[34:38]
 
-    # 构建 T_laser_base 变换矩阵 (基座在激光坐标系下的位姿)
+    #* 构建 T_laser_base 变换矩阵 (基座在激光坐标系下的位姿)
     R_laser_base_torch = quaternion_to_rotation_matrix(t_laser_base_quat_torch)
     T_laser_base_matrix_torch = torch.eye(4, dtype=torch.float64)
     T_laser_base_matrix_torch[0:3, 0:3] = R_laser_base_torch
     T_laser_base_matrix_torch[0:3, 3] = t_laser_base_pos_torch
 
-    # num_frames_to_test = min(5, all_joint_angles_np.shape[0]) # 测试前5帧或所有帧（如果少于5帧）
-    # 指定要测试的帧的索引 (0-based)
-    frames_to_test_indices = [1, 8, 18, 26] # 对应用户请求的第 2, 9, 19, 27 组
-
-    # for i in range(num_frames_to_test):
+    #* 指定要测试的组的索引 (0-based)
+    frames_to_test_indices = [0,1,2,3,4] 
     for i in frames_to_test_indices:
-        # 检查索引是否越界
+        #* 检查索引是否越界
         if i >= all_joint_angles_np.shape[0]:
             print(f"\n警告: 索引 {i+1} 超出关节角度数据范围 (共 {all_joint_angles_np.shape[0]} 组). 跳过此索引.")
             continue
@@ -302,16 +284,9 @@ if __name__ == '__main__':
         q_torch = torch.as_tensor(q_deg_array_np, dtype=torch.float64)
 
         print(f"\n关节角度（度） {i+1}: {q_deg_array_np.tolist()}")
-
-        # 1. 计算机器人模型预测的工具在基座坐标系下的位姿
         T_pred_robot_base_torch = forward_kinematics_T(q_torch, params_for_fk_torch)
-        
-        # 2. 将机器人预测位姿转换到激光跟踪仪坐标系
         T_pred_in_laser_frame_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
-
-        # 3. 从变换矩阵提取位姿向量
         pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_frame_torch)
-        
         pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()
         print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {pose_pred_in_laser_np.tolist()}")
 

@@ -19,6 +19,49 @@ from jacobian_torch import (
 #* 固定的参数
 ALL_FIXED_INDICES = [1,5,9,13,17,21,3,19,23,6,10,18] 
 
+# Helper function to convert rotation matrix to quaternion
+def _rotation_matrix_to_quaternion(R_matrix):
+    """Converts a 3x3 rotation matrix to a quaternion [qx, qy, qz, qw]."""
+    if not torch.is_tensor(R_matrix):
+        R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
+
+    q = torch.zeros(4, dtype=R_matrix.dtype, device=R_matrix.device)
+    
+    trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]
+
+    if trace > 1e-8: # Added epsilon for stability if trace is very near 0
+        S = torch.sqrt(trace + 1.0) * 2.0 
+        q[3] = 0.25 * S  # qw
+        q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S # qx
+        q[1] = (R_matrix[0,2] - R_matrix[2,0]) / S # qy
+        q[2] = (R_matrix[1,0] - R_matrix[0,1]) / S # qz
+    elif (R_matrix[0,0] > R_matrix[1,1]) and (R_matrix[0,0] > R_matrix[2,2]):
+        S = torch.sqrt(1.0 + R_matrix[0,0] - R_matrix[1,1] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[2,1] - R_matrix[1,2]) / S # qw
+        q[0] = 0.25 * S # qx
+        q[1] = (R_matrix[0,1] + R_matrix[1,0]) / S # qy
+        q[2] = (R_matrix[0,2] + R_matrix[2,0]) / S # qz
+    elif R_matrix[1,1] > R_matrix[2,2]:
+        S = torch.sqrt(1.0 + R_matrix[1,1] - R_matrix[0,0] - R_matrix[2,2] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[0,2] - R_matrix[2,0]) / S # qw
+        q[0] = (R_matrix[0,1] + R_matrix[1,0]) / S # qx
+        q[1] = 0.25 * S # qy
+        q[2] = (R_matrix[1,2] + R_matrix[2,1]) / S # qz
+    else:
+        S = torch.sqrt(1.0 + R_matrix[2,2] - R_matrix[0,0] - R_matrix[1,1] + 1e-12) * 2.0 # Added small epsilon
+        q[3] = (R_matrix[1,0] - R_matrix[0,1]) / S # qw
+        q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S # qx
+        q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S # qy
+        q[2] = 0.25 * S # qz
+    
+    # Normalize the quaternion
+    norm_q = torch.linalg.norm(q)
+    if norm_q > 1e-9: # Avoid division by zero if norm is too small
+        q = q / norm_q
+    else: # Should not happen with valid rotation matrix, but as a safeguard
+        q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
+
+    return q # [qx, qy, qz, qw]
 
 #! 计算单组数据的误差向量
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
@@ -29,13 +72,14 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     #* 提取参数
     params_for_fk = params_t[0:31] 
     t_laser_base_pos = params_t[31:34]
-    t_laser_base_quat = params_t[34:38]
+    t_laser_base_quat = params_t[34:38] # This is [qx, qy, qz, qw]
 
     #* 计算预测位姿（机器人基座坐标系下）
     T_pred_robot_base = forward_kinematics_T(q_t, params_for_fk) 
 
     #* 构建T_laser_base变换矩阵（基座在激光坐标系下的位姿）
-    R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat)
+    R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat) # Assumes q_to_R expects [x,y,z,w] or [w,x,y,z] - check jacobian_torch
+                                                                    # Based on current code, it's [x,y,z,w]
     T_laser_base_matrix = torch.eye(4, dtype=torch.float64)
     T_laser_base_matrix[0:3, 0:3] = R_laser_base
     T_laser_base_matrix[0:3, 3] = t_laser_base_pos
@@ -43,15 +87,48 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     #* 将机器人预测位姿转换到激光跟踪仪坐标系
     T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
     
-    #* 从变换矩阵提取位姿向量
-    pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_frame)
+    # 计算激光跟踪仪-基座变换矩阵
+
+    pred_pos = T_pred_in_laser_frame[0:3, 3]
+    pred_R = T_pred_in_laser_frame[0:3, 0:3]
+
+    # 2. 提取测量位置和旋转矩阵
+    T_laser_t = torch.as_tensor(laser_matrix, dtype=torch.float64)
+    meas_pos = T_laser_t[0:3, 3]
+    meas_R = T_laser_t[0:3, 0:3]
+
+    # 3. 位置误差
+    pos_error = pred_pos - meas_pos
+
+    # 4. 将旋转矩阵转换为四元数 [qx, qy, qz, qw]
+    q_pred = _rotation_matrix_to_quaternion(pred_R) 
+    q_meas = _rotation_matrix_to_quaternion(meas_R) 
+
+    # 5. 使用四元数计算旋转误差
+    # q_err = q_pred * q_meas_conjugate
+
+    q_meas_conj_x = -q_meas[0]
+    q_meas_conj_y = -q_meas[1]
+    q_meas_conj_z = -q_meas[2]
+    q_meas_conj_w =  q_meas[3]
     
-    #* 获取激光跟踪仪位姿（已经在激光坐标系下）
-    T_laser = torch.as_tensor(laser_matrix, dtype=torch.float64)
-    pose_laser = extract_pose_from_T(T_laser)
+    # 四元数乘法: q_pred * q_meas_conj
+    # q_pred = [x1, y1, z1, w1], q_meas_conj = [x2, y2, z2, w2]
+    # qw = w1*w2 - x1*x2 - y1*y2 - z1*z2
+    # qx = w1*x2 + x1*w2 + y1*z2 - z1*y2
+    # qy = w1*y2 - x1*z2 + y1*w2 + z1*x2
+    # qz = w1*z2 + x1*y2 - y1*x2 + z1*w2
     
-    #* 计算误差向量
-    return (pose_pred_in_laser - pose_laser) * torch.as_tensor(weights, dtype=torch.float64)
+    q_err_w = q_pred[3] * q_meas_conj_w - q_pred[0] * q_meas_conj_x - q_pred[1] * q_meas_conj_y - q_pred[2] * q_meas_conj_z
+    q_err_x = q_pred[3] * q_meas_conj_x + q_pred[0] * q_meas_conj_w + q_pred[1] * q_meas_conj_z - q_pred[2] * q_meas_conj_y
+    q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
+    q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
+
+
+    current_q_err_vec = torch.stack([q_err_x, q_err_y, q_err_z])
+    orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
+    combined_error = torch.cat((pos_error, orient_error))
+    return combined_error * torch.as_tensor(weights, dtype=torch.float64)
 
 
 #! 计算所有样本的总误差（2-范数）
@@ -62,7 +139,7 @@ def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_
         return torch.tensor(0.0, dtype=torch.float64) 
 
     for i in range(n_samples):
-        error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i], weights) # 使用组合参数
+        error_vec = compute_error_vector(params, joint_angles[i], laser_matrices[i], weights) 
         total_error_sum_sq += torch.sum(error_vec**2)
     
     #* 返回平均误差 (RMS误差) 公式：RMS = sqrt(sum(error_vec^2) / n_samples)
@@ -122,14 +199,12 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     n_samples = len(joint_angles)
     if n_samples == 0:
         print("错误: 无法加载关节角度或激光数据，样本数量为0。")
-        return initial_params # 或者抛出异常
+        return initial_params 
     
-    #* 记录初始误差
-    current_avg_error = compute_total_error_avg(params, joint_angles, laser_matrices) # 已修改为计算平均误差
-
-    #* 计算初始误差
+    #* 记录初始平均误差
+    current_avg_error = compute_total_error_avg(params, joint_angles, laser_matrices) 
     print(f"初始平均误差：{current_avg_error.item():.6f}")
-    avg_initial_error = current_avg_error.item() #! 修正: 保存初始平均误差
+    avg_initial_error = current_avg_error.item() 
     
     #* 处理可优化参数索引
     if opt_indices is None:
@@ -171,27 +246,22 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             except:
                 print(f"矩阵求解错误，增大阻尼因子 λ = {lambda_val} -> {lambda_val * 10}")
                 lambda_val *= 10
-                # 如果阻尼因子过大，提前结束优化
                 if lambda_val > 1e8:
-                    print(f"阻尼因子超过阈值 1e8，提前结束优化")
+                    print(f"阻尼因子超过阈值，提前结束优化")
                     return params.numpy()
                 continue
-            
-            # 打印更新步长和方向
-            delta_norm = torch.linalg.norm(delta).item()
-            print(f"  尝试更新: 步长 (范数) = {delta_norm:.6e}, 方向 (delta) = {delta.numpy()}")
 
             # 尝试更新
             params_new = params.clone()
             params_new[opt_indices] += delta
             
             # 计算新误差
-            new_avg_error = compute_total_error_avg(params_new, joint_angles, laser_matrices) # 已修改为计算平均误差
+            new_avg_error = compute_total_error_avg(params_new, joint_angles, laser_matrices)
             
             # 判断是否接受更新
             if new_avg_error < current_avg_error:
                 params = params_new
-                current_avg_error = new_avg_error # 更新为平均误差
+                current_avg_error = new_avg_error
                 lambda_val = max(lambda_val / 10, 1e-7)
                 update_success = True
 
@@ -215,7 +285,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         params[34:38] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: 激光跟踪仪-基座四元数模长接近于零，已重置为[0,0,0,1]")
 
-                print(f"迭代 {iteration+1}, 平均误差: {current_avg_error.item():.6f}, λ = {lambda_val:.6e}") # 修改打印信息
+                print(f"迭代 {iteration+1}: 平均误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
             else:
                 lambda_val *= 10
                 print(f"拒绝更新，增大阻尼因子 λ = {lambda_val}")
@@ -393,7 +463,7 @@ if __name__ == '__main__':
         lambda_init_group2=0.01   # 第二组参数初始阻尼因子
     )
     
-    # # 可选：最终微调（使用交替优化结果作为初始值进行一次整体优化）
+    # # 最终微调（使用交替优化结果作为初始值进行一次整体优化）
     # print("\n进行最终微调优化...")
     # final_optimized_params = optimize_dh_parameters(
     #     optimized_params, 
@@ -408,11 +478,11 @@ if __name__ == '__main__':
     # # 评估优化效果
     # evaluate_optimization(initial_params, final_optimized_params) 
 
-    # 保存优化结果 (使用交替优化的结果)
-    save_optimization_results(optimized_params) 
+    # # 保存优化结果 (使用交替优化的结果)
+    # save_optimization_results(optimized_params) 
 
-    # 评估优化效果 (使用交替优化的结果)
-    evaluate_optimization(initial_params, optimized_params)
+    # # 评估优化效果 (使用交替优化的结果)
+    # evaluate_optimization(initial_params, optimized_params)
     
     # 输出优化前后的参数对比
     print("\n" + "="*70)

@@ -1,4 +1,8 @@
 import os
+<<<<<<< HEAD
+=======
+import sys #! 添加sys模块以修改路径
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 import numpy as np
 import torch
 import torch.autograd.functional as F
@@ -7,7 +11,17 @@ import pandas as pd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+<<<<<<< HEAD
 np.set_printoptions(precision=8)
+=======
+
+#! 将项目根目录添加到sys.path
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
+np.set_printoptions(precision=8)
+
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 #! 常量定义
 JOINT_ANGLE_FILE = os.path.join(PROJECT_ROOT, 'data', 'joint_angle.csv')
 LASER_POS_FILE = os.path.join(PROJECT_ROOT, 'data', 'laser_pos.csv') 
@@ -42,6 +56,18 @@ LASER_TCP_OFFSET_QUATERNION = [0.4961, 0.5031, 0.505, 0.4957]
 LASER_BASE_POSITION = [3610.8319, 3300.7233, 13.6472]
 LASER_BASE_QUATERNION = [0.0014, -0.0055, 0.7873, -0.6166]
 
+<<<<<<< HEAD
+=======
+# 尝试从 jacobian_torch 导入 ERROR_WEIGHTS
+try:
+    from jacobian_torch import ERROR_WEIGHTS
+    ERROR_WEIGHTS_IMPORTED = True
+    print("成功从 jacobian_torch 导入 ERROR_WEIGHTS.")
+except ModuleNotFoundError:
+    ERROR_WEIGHTS_IMPORTED = False
+    print("警告: 无法从 jacobian_torch 导入 ERROR_WEIGHTS. 将使用内部定义的默认值.")
+    # 如果导入失败，则在下面函数中使用 ERROR_WEIGHTS_LOCAL
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
 #! 从CSV加载优化后的DH参数 (CSV列顺序: theta_offset,alpha,d,a)
 def load_optimized_dh_params(filepath):
@@ -160,9 +186,17 @@ def extract_pose_from_T(T):
     R = T[0:3, 0:3]
    
     sy = torch.sqrt(R[0,0]**2 + R[1,0]**2)
+<<<<<<< HEAD
     singular = sy < 1e-8 # 使用epsilon比较
 
     if not singular:
+=======
+    # singular = sy < 1e-8 # 使用epsilon比较 #! BUG: 原本的这里可能会导致singular判断不准，直接用torch.isclose替代
+    singular = torch.isclose(sy, torch.tensor(0.0, dtype=sy.dtype), atol=1e-8)
+
+
+    if not singular.any(): # .any() 是因为 singular 可能是一个张量
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
         x = torch.atan2(R[2,1], R[2,2])
         y = torch.atan2(-R[2,0], sy)
         z = torch.atan2(R[1,0], R[0,0])
@@ -178,6 +212,7 @@ def extract_pose_from_T(T):
         
     return torch.cat([position, euler_angles_torch])
 
+<<<<<<< HEAD
 #! 计算预测位姿与测量位姿之间的平均误差
 def compute_average_pose_errors(joint_angles_all_frames_np, 
                                 fk_params_torch, 
@@ -215,6 +250,60 @@ def compute_average_pose_errors(joint_angles_all_frames_np,
     avg_position_error = np.mean(position_error_magnitudes) if position_error_magnitudes else 0.0
     avg_orientation_error = np.mean(orientation_error_magnitudes) if orientation_error_magnitudes else 0.0
     return avg_position_error, avg_orientation_error
+=======
+#! 计算预测位姿与测量位姿之间的平均加权误差 (修改为计算分量的RMSE，与lm_optimize_pytorch.py中的compute_total_error一致)
+def compute_average_weighted_error(joint_angles_all_frames_np, 
+                                   fk_params_torch, 
+                                   T_laser_base_matrix_torch, 
+                                   measured_T_matrices_all_frames_np, 
+                                   frames_to_process_indices):
+    total_weighted_error_sum_sq = 0.0 # 用于累加所有帧的加权误差平方和
+    num_processed_frames = 0
+
+    if ERROR_WEIGHTS_IMPORTED:
+        ERROR_WEIGHTS_torch = torch.tensor(ERROR_WEIGHTS, dtype=torch.float64, device=fk_params_torch.device)
+    else:
+        # 如果无法从 jacobian_torch 导入，则在这里定义一个一致的局部版本
+        ERROR_WEIGHTS_LOCAL = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1]) 
+        ERROR_WEIGHTS_torch = torch.tensor(ERROR_WEIGHTS_LOCAL, dtype=torch.float64, device=fk_params_torch.device)
+        print("提示: compute_average_weighted_error 正在使用内部定义的 ERROR_WEIGHTS_LOCAL.")
+
+    if not frames_to_process_indices:
+        return 0.0
+
+    for frame_idx in frames_to_process_indices:
+        if frame_idx >= joint_angles_all_frames_np.shape[0] or \
+           frame_idx >= measured_T_matrices_all_frames_np.shape[0]:
+            print(f"警告: 组索引 {frame_idx} 超出数据范围，跳过误差计算。")
+            continue
+            
+        current_joint_angles_torch = torch.as_tensor(joint_angles_all_frames_np[frame_idx], dtype=torch.float64, device=fk_params_torch.device)
+        
+        T_pred_robot_base_torch = forward_kinematics_T(current_joint_angles_torch, fk_params_torch)
+        T_pred_in_laser_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
+        pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_torch) # 6D pose
+        
+        T_measured_this_frame_torch = torch.as_tensor(measured_T_matrices_all_frames_np[frame_idx], dtype=torch.float64, device=fk_params_torch.device)
+        pose_measured_in_laser = extract_pose_from_T(T_measured_this_frame_torch) # 6D pose
+
+        # 计算原始6D误差向量
+        error_vector_original = pose_pred_in_laser - pose_measured_in_laser
+        
+        # 应用权重
+        weighted_error_vector = error_vector_original * ERROR_WEIGHTS_torch
+        
+        # 累加加权误差向量各分量的平方和
+        total_weighted_error_sum_sq += torch.sum(weighted_error_vector**2)
+        num_processed_frames += 1
+        
+    if num_processed_frames == 0:
+        return 0.0 # 或者根据需要处理，例如返回NaN或抛出异常
+        
+    # 计算均方误差，然后开方得到RMSE
+    mean_squared_error = total_weighted_error_sum_sq / num_processed_frames
+    avg_rmse = torch.sqrt(mean_squared_error)
+    return avg_rmse.item()
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
 def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
     if use_optimized_csv_data:
@@ -223,8 +312,12 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
             current_dh_params = load_optimized_dh_params(OPTIMIZED_DH_PARAMS_FILE)
             current_tool_offset_position, current_tool_offset_quaternion = load_optimized_tcp_params(OPTIMIZED_TCP_PARAMS_FILE)
             temp_optimized_t_laser_base_params = load_optimized_t_laser_base_params(OPTIMIZED_T_LASER_BASE_PARAMS_FILE)
+<<<<<<< HEAD
             # current_t_laser_base_params 需要是7个元素的数组 [pos_x, pos_y, pos_z, quat_x, quat_y, quat_z, quat_w]
             # load_optimized_t_laser_base_params 返回的就是这个格式
+=======
+           
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
             current_t_laser_base_params = temp_optimized_t_laser_base_params
             print("成功从CSV文件加载优化后的参数。")
             param_source_name = "优化后的参数 (来自CSV)"
@@ -249,7 +342,11 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
             np.array(LASER_BASE_POSITION),
             np.array(LASER_BASE_QUATERNION)
         ])
+<<<<<<< HEAD
         param_source_name = "参考/雷达参数 (预定义)"
+=======
+        param_source_name = "参考/雷达参数 "
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
     # 打印正在使用的参数
     print(f"\n--- 当前使用的 {param_source_name} ---")
@@ -290,8 +387,13 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
 
     num_total_frames = all_joint_angles_np.shape[0]
     if all_T_laser_tool_measured_np.shape[0] < num_total_frames:
+<<<<<<< HEAD
         print(f"警告: 激光测量数据帧数 ({all_T_laser_tool_measured_np.shape[0]}) 少于关节角度帧数 ({num_total_frames}).")
         print(f"将仅处理 {all_T_laser_tool_measured_np.shape[0]} 帧数据.")
+=======
+        print(f"警告: 激光测量数据数 ({all_T_laser_tool_measured_np.shape[0]}) 少于关节角度数 ({num_total_frames}).")
+        print(f"将仅处理 {all_T_laser_tool_measured_np.shape[0]} 数据.")
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
         num_total_frames = all_T_laser_tool_measured_np.shape[0]
         
     frames_to_test_indices = list(range(num_total_frames))
@@ -304,9 +406,14 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
         current_joint_angles_np = all_joint_angles_np[frame_idx]
         current_joint_angles_torch = torch.as_tensor(current_joint_angles_np, dtype=torch.float64)
 
+<<<<<<< HEAD
         print(f"\n--- 第 {frame_idx+1} 帧 --- ")
         print(f"关节角度 (度): {current_joint_angles_np.tolist()}")
 
+=======
+#!打印关节角度
+        print(f"\n--- 第 {frame_idx+1} 组 --- ")
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
         T_pred_robot_base_torch = forward_kinematics_T(current_joint_angles_torch, params_for_fk_torch)
         T_pred_in_laser_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
         pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_torch)
@@ -315,6 +422,7 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
         print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {formatted_pose}")
     
     if frames_to_test_indices:
+<<<<<<< HEAD
         avg_pos_err, avg_ori_err = compute_average_pose_errors(
             all_joint_angles_np, 
             params_for_fk_torch, 
@@ -327,14 +435,58 @@ def perform_kinematics_analysis_and_print_results(use_optimized_csv_data: bool):
         print(f"平均姿态误差 (度): {avg_ori_err:.4f}")
     else:
         print("\n没有可用的帧用于计算平均误差。")
+=======
+        avg_total_weighted_error = compute_average_weighted_error(
+            all_joint_angles_np,
+            params_for_fk_torch,
+            T_laser_base_matrix_torch,
+            all_T_laser_tool_measured_np,
+            frames_to_test_indices
+        )
+        print(f"\n--- 平均加权误差评估 (所有误差分量的RMSE，与优化脚本一致) (基于全部 {len(frames_to_test_indices)} 组, 使用 {param_source_name}) ---")
+        print(f"总体平均RMSE: {avg_total_weighted_error:.6f}")
+        return avg_total_weighted_error
+    else:
+        print("\n没有可用的组用于计算平均误差。")
+        return None
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
 if __name__ == '__main__':
 
     # True  - 从CSV文件加载优化后的参数
     # False - 使用脚本中预定义的 LASER_... 参数 (参考/雷达数据)
+<<<<<<< HEAD
     use_optimized_data_source = True
 
     perform_kinematics_analysis_and_print_results(use_optimized_csv_data=use_optimized_data_source)
+=======
+
+    print("\n" + "="*70)
+    print(" " * 20 + "运动学分析与误差对比")
+    print("="*70)
+
+    print("\n--- 分析1: 使用优化后的参数 (来自CSV文件) ---")
+    rmse_optimized = perform_kinematics_analysis_and_print_results(use_optimized_csv_data=True)
+
+    print("\n--- 分析2: 使用预定义的参考/雷达参数 ---")
+    rmse_reference = perform_kinematics_analysis_and_print_results(use_optimized_csv_data=False)
+
+    print("\n" + "="*70)
+    print(" " * 25 + "误差结果对比总结")
+    print("="*70)
+    if rmse_optimized is not None and rmse_reference is not None:
+        print(f"使用激光参数的总体平均RMSE: {rmse_reference:.6f}")
+        print(f"使用优化后参数的总体平均RMSE: {rmse_optimized:.6f}")
+        if rmse_reference > 1e-9: # 避免除以零
+            improvement = (rmse_reference - rmse_optimized) / rmse_reference * 100
+            print(f"通过优化实现的RMSE改进率: {improvement:.2f}%")
+        else:
+            print("参考RMSE过小，无法计算改进率。")
+    else:
+        print("未能成功计算一个或两个RMSE值，无法进行对比。")
+    print("="*70)
+    
+>>>>>>> d65923ab4aa3302280a2aa55d9ac91c940d386cb
 
    
     

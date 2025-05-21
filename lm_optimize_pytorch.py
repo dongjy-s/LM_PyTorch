@@ -118,7 +118,7 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     return combined_error * torch.as_tensor(weights, dtype=torch.float64)
 
 
-#! 计算所有样本的平均误差平方和
+#! 计算所有样本的均方根误差
 def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
     total_error_sum_sq = 0.0 
     n_samples = len(joint_angles)

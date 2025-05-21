@@ -191,8 +191,6 @@ def extract_pose_from_T(T):
     ry = torch.rad2deg(y)
     rz = torch.rad2deg(z)
     euler_angles_torch = torch.stack([rx, ry, rz])
-        
-    # 连接位置和姿态
     return torch.cat([position, euler_angles_torch])
 
 #! 保存雅可比矩阵
@@ -203,6 +201,75 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv
         os.makedirs(dirpath)
     np.savetxt(filepath, jacobian_np, delimiter=',', fmt='%.12f')
     print(f"雅可比矩阵已保存到: {filepath}")
+
+#! 将PyTorch旋转矩阵转换为四元数 [qx, qy, qz, qw]
+def _rotation_matrix_to_quaternion_torch(R):
+
+    qw = torch.zeros_like(R[0,0])
+    qx = torch.zeros_like(R[0,0])
+    qy = torch.zeros_like(R[0,0])
+    qz = torch.zeros_like(R[0,0])
+
+    trace = R[0,0] + R[1,1] + R[2,2]
+    
+    # 情况 1: trace > 0
+    S_case1 = torch.sqrt(trace + 1.0) * 2.0
+    qw_case1 = 0.25 * S_case1
+    qx_case1 = (R[2,1] - R[1,2]) / S_case1
+    qy_case1 = (R[0,2] - R[2,0]) / S_case1
+    qz_case1 = (R[1,0] - R[0,1]) / S_case1
+
+    # 情况 2: R[0,0] 是对角线上的最大元素
+    S_case2 = torch.sqrt(1.0 + R[0,0] - R[1,1] - R[2,2]) * 2.0
+    qw_case2 = (R[2,1] - R[1,2]) / S_case2
+    qx_case2 = 0.25 * S_case2
+    qy_case2 = (R[0,1] + R[1,0]) / S_case2
+    qz_case2 = (R[0,2] + R[2,0]) / S_case2
+
+    # 情况 3: R[1,1] 是对角线上的最大元素
+    S_case3 = torch.sqrt(1.0 + R[1,1] - R[0,0] - R[2,2]) * 2.0
+    qw_case3 = (R[0,2] - R[2,0]) / S_case3
+    qx_case3 = (R[0,1] + R[1,0]) / S_case3
+    qy_case3 = 0.25 * S_case3
+    qz_case3 = (R[1,2] + R[2,1]) / S_case3
+
+    # 情况 4: R[2,2] 是对角线上的最大元素
+    S_case4 = torch.sqrt(1.0 + R[2,2] - R[0,0] - R[1,1]) * 2.0
+    qw_case4 = (R[1,0] - R[0,1]) / S_case4
+    qx_case4 = (R[0,2] + R[2,0]) / S_case4
+    qy_case4 = (R[1,2] + R[2,1]) / S_case4
+    qz_case4 = 0.25 * S_case4
+    
+    # 使用 torch.where 选择合适的计算结果
+    # 条件 1: trace > 0
+    cond1 = trace > 1e-8 # 添加一个很小的阈值以避免与0直接比较时可能出现的浮点数精度问题
+    qw = torch.where(cond1, qw_case1, qw)
+    qx = torch.where(cond1, qx_case1, qx)
+    qy = torch.where(cond1, qy_case1, qy)
+    qz = torch.where(cond1, qz_case1, qz)
+
+    # 条件 2: 非cond1 且 (R[0,0] > R[1,1]) 且 (R[0,0] > R[2,2])
+    cond2 = ~cond1 & (R[0,0] > R[1,1]) & (R[0,0] > R[2,2])
+    qw = torch.where(cond2, qw_case2, qw)
+    qx = torch.where(cond2, qx_case2, qx)
+    qy = torch.where(cond2, qy_case2, qy)
+    qz = torch.where(cond2, qz_case2, qz)
+
+    # 条件 3: 非cond1 且 非cond2 且 (R[1,1] > R[2,2])
+    cond3 = ~cond1 & ~cond2 & (R[1,1] > R[2,2])
+    qw = torch.where(cond3, qw_case3, qw)
+    qx = torch.where(cond3, qx_case3, qx)
+    qy = torch.where(cond3, qy_case3, qy)
+    qz = torch.where(cond3, qz_case3, qz)
+    
+    # 条件 4: 非cond1 且 非cond2 且 非cond3 (即 R[2,2] 是最大元素或者所有对角线元素相等的情况)
+    cond4 = ~cond1 & ~cond2 & ~cond3
+    qw = torch.where(cond4, qw_case4, qw)
+    qx = torch.where(cond4, qx_case4, qx)
+    qy = torch.where(cond4, qy_case4, qy)
+    qz = torch.where(cond4, qz_case4, qz)
+
+    return torch.stack([qx, qy, qz, qw]) # 返回四元数 [qx, qy, qz, qw]
 
 #! 计算误差向量和优化参数之间的雅可比矩阵
 def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
@@ -232,11 +299,39 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
         #* 3. 将DH参数计算的位姿转换到激光跟踪仪坐标系 
         T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
 
-        #* 4. 从变换矩阵提取位姿向量
-        pose_pred_in_laser = extract_pose_from_T(T_pred_in_laser_frame)
-        pose_measured_in_laser = extract_pose_from_T(T_laser_tool_measured_torch) 
+
+        
+        #* 4.1 计算位置误差
+        pos_pred_in_laser = T_pred_in_laser_frame[0:3, 3]
+        pos_measured_in_laser = T_laser_tool_measured_torch[0:3, 3]
+        pos_error = pos_pred_in_laser - pos_measured_in_laser
+
+        #* 4.2 计算姿态误差 (使用四元数)
+        R_pred = T_pred_in_laser_frame[0:3, 0:3]  # 预测的旋转矩阵
+        R_meas = T_laser_tool_measured_torch[0:3, 0:3] # 测量的旋转矩阵
+
+        q_pred = _rotation_matrix_to_quaternion_torch(R_pred) # 预测的四元数 [qx, qy, qz, qw]
+        q_meas = _rotation_matrix_to_quaternion_torch(R_meas) # 测量的四元数 [qx, qy, qz, qw]
+
+        # 计算测量四元数的共轭: q_meas_conj = [-x, -y, -z, w]
+        q_meas_conj_x = -q_meas[0]
+        q_meas_conj_y = -q_meas[1]
+        q_meas_conj_z = -q_meas[2]
+        q_meas_conj_w =  q_meas[3]
+
+        q_err_w = q_pred[3] * q_meas_conj_w - q_pred[0] * q_meas_conj_x - q_pred[1] * q_meas_conj_y - q_pred[2] * q_meas_conj_z
+        q_err_x = q_pred[3] * q_meas_conj_x + q_pred[0] * q_meas_conj_w + q_pred[1] * q_meas_conj_z - q_pred[2] * q_meas_conj_y
+        q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
+        q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
+        
+
+        orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
+        
+        #* 5. 组合误差向量
+        error_before_weight = torch.cat([pos_error, orient_error])
+        
         #! 六维误差向量
-        return (pose_pred_in_laser - pose_measured_in_laser) * weights_torch
+        return error_before_weight * weights_torch
 
     #* 计算并返回雅可比矩阵 (维度应为 6x38)
     J = F.jacobian(err_vec_fn, params_torch) 

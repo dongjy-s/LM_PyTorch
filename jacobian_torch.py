@@ -34,11 +34,11 @@ JOINT_LIMITS = np.array([
     [-175, 175]
 ])
 #! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([2.001192, -0.428111, 96.764181])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.706866, 0.000468, -0.003425, 0.707339])
+INIT_TOOL_OFFSET_POSITION = np.array([1.7652, -0.7405, 95.9384])
+INIT_TOOL_OFFSET_QUATERNION = np.array([0.7072, -0.001, -0.0022, 0.707])
 
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([2485.338605, 2913.227368, 36.016355, 0.001320, 0.001561, -0.591506, 0.806298])
+INIT_T_LASER_BASE_PARAMS = np.array([2482.8681, 2904.818, 36.0253, 0.0019, 0.0009, -0.592, 0.806])
 
 #! 把激光跟踪仪测量的位姿转换为 4 * 4 变换矩阵
 def get_laser_tool_matrix():
@@ -203,73 +203,77 @@ def save_jacobian_to_csv(jacobian_tensor, filepath='results/PyTorch_jacobian.csv
     print(f"雅可比矩阵已保存到: {filepath}")
 
 #! 将PyTorch旋转矩阵转换为四元数 [qx, qy, qz, qw]
-def _rotation_matrix_to_quaternion_torch(R):
+def _rotation_matrix_to_quaternion_torch(R_matrix):
+    """ 
+    旋转矩阵转换为四元数公式：
+        q = [qx, qy, qz, qw]
+        q = [
+            (R_matrix[2,1] - R_matrix[1,2]) / S,
+            (R_matrix[0,2] - R_matrix[2,0]) / S,
+            (R_matrix[1,0] - R_matrix[0,1]) / S,
+            0.25 * S
+        ]
+    """
+    if not torch.is_tensor(R_matrix):
+        R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
+    elif R_matrix.dtype != torch.float64: # 确保数据类型为 float64
+        R_matrix = R_matrix.to(dtype=torch.float64)
 
-    qw = torch.zeros_like(R[0,0])
-    qx = torch.zeros_like(R[0,0])
-    qy = torch.zeros_like(R[0,0])
-    qz = torch.zeros_like(R[0,0])
+    q = torch.zeros(4, dtype=R_matrix.dtype, device=R_matrix.device)
+    trace = R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]
 
-    trace = R[0,0] + R[1,1] + R[2,2]
-    
-    # 情况 1: trace > 0
-    S_case1 = torch.sqrt(trace + 1.0) * 2.0
-    qw_case1 = 0.25 * S_case1
-    qx_case1 = (R[2,1] - R[1,2]) / S_case1
-    qy_case1 = (R[0,2] - R[2,0]) / S_case1
-    qz_case1 = (R[1,0] - R[0,1]) / S_case1
+    if trace > 1e-8:
+        S = torch.sqrt(trace + 1.0) * 2.0
+        q[3] = 0.25 * S 
+        q[0] = (R_matrix[2,1] - R_matrix[1,2]) / S 
+        q[1] = (R_matrix[0,2] - R_matrix[2,0]) / S 
+        q[2] = (R_matrix[1,0] - R_matrix[0,1]) / S 
+    elif (R_matrix[0,0] > R_matrix[1,1]) and (R_matrix[0,0] > R_matrix[2,2]):
+        S = torch.sqrt(1.0 + R_matrix[0,0] - R_matrix[1,1] - R_matrix[2,2] + 1e-12) * 2.0 # 添加eps防止开方负数
+        q[0] = 0.25 * S 
+        q[1] = (R_matrix[0,1] + R_matrix[1,0]) / S 
+        q[2] = (R_matrix[0,2] + R_matrix[2,0]) / S 
+        q[3] = (R_matrix[2,1] - R_matrix[1,2]) / S 
+    elif R_matrix[1,1] > R_matrix[2,2]:
+        S = torch.sqrt(1.0 + R_matrix[1,1] - R_matrix[0,0] - R_matrix[2,2] + 1e-12) * 2.0 # 添加eps防止开方负数
+        q[1] = 0.25 * S 
+        q[0] = (R_matrix[0,1] + R_matrix[1,0]) / S 
+        q[2] = (R_matrix[1,2] + R_matrix[2,1]) / S 
+        q[3] = (R_matrix[0,2] - R_matrix[2,0]) / S
+    else:
+        S = torch.sqrt(1.0 + R_matrix[2,2] - R_matrix[0,0] - R_matrix[1,1] + 1e-12) * 2.0 # 添加eps防止开方负数
+        q[2] = 0.25 * S 
+        q[0] = (R_matrix[0,2] + R_matrix[2,0]) / S
+        q[1] = (R_matrix[1,2] + R_matrix[2,1]) / S
+        q[3] = (R_matrix[1,0] - R_matrix[0,1]) / S 
 
-    # 情况 2: R[0,0] 是对角线上的最大元素
-    S_case2 = torch.sqrt(1.0 + R[0,0] - R[1,1] - R[2,2]) * 2.0
-    qw_case2 = (R[2,1] - R[1,2]) / S_case2
-    qx_case2 = 0.25 * S_case2
-    qy_case2 = (R[0,1] + R[1,0]) / S_case2
-    qz_case2 = (R[0,2] + R[2,0]) / S_case2
+    #* 归一化四元数
+    norm_q = torch.linalg.norm(q)
+    if norm_q > 1e-9:
+        q = q / norm_q
+    else:
+        # 如果模长非常小，则返回一个标准的单位四元数 (通常表示无旋转)
+        q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
+    return q # 返回四元数 [qx, qy, qz, qw]
 
-    # 情况 3: R[1,1] 是对角线上的最大元素
-    S_case3 = torch.sqrt(1.0 + R[1,1] - R[0,0] - R[2,2]) * 2.0
-    qw_case3 = (R[0,2] - R[2,0]) / S_case3
-    qx_case3 = (R[0,1] + R[1,0]) / S_case3
-    qy_case3 = 0.25 * S_case3
-    qz_case3 = (R[1,2] + R[2,1]) / S_case3
+#! 将PyTorch四元数转换为欧拉角 (ZYX顺序: yaw, pitch, roll)
+def _quaternion_to_euler_angles_torch(q):
+    qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+ 
+    sinr_cosp = 2 * (qw * qx + qy * qz)
+    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+   
+    sinp = 2 * (qw * qy - qz * qx)
+    if torch.abs(sinp) >= 1:
+        pitch = torch.copysign(torch.pi / 2, sinp) # use 90 degrees if out of range
+    else:
+        pitch = torch.asin(sinp)
+    siny_cosp = 2 * (qw * qz + qx * qy)
+    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+    yaw = torch.atan2(siny_cosp, cosy_cosp)
 
-    # 情况 4: R[2,2] 是对角线上的最大元素
-    S_case4 = torch.sqrt(1.0 + R[2,2] - R[0,0] - R[1,1]) * 2.0
-    qw_case4 = (R[1,0] - R[0,1]) / S_case4
-    qx_case4 = (R[0,2] + R[2,0]) / S_case4
-    qy_case4 = (R[1,2] + R[2,1]) / S_case4
-    qz_case4 = 0.25 * S_case4
-    
-    # 使用 torch.where 选择合适的计算结果
-    # 条件 1: trace > 0
-    cond1 = trace > 1e-8 # 添加一个很小的阈值以避免与0直接比较时可能出现的浮点数精度问题
-    qw = torch.where(cond1, qw_case1, qw)
-    qx = torch.where(cond1, qx_case1, qx)
-    qy = torch.where(cond1, qy_case1, qy)
-    qz = torch.where(cond1, qz_case1, qz)
-
-    # 条件 2: 非cond1 且 (R[0,0] > R[1,1]) 且 (R[0,0] > R[2,2])
-    cond2 = ~cond1 & (R[0,0] > R[1,1]) & (R[0,0] > R[2,2])
-    qw = torch.where(cond2, qw_case2, qw)
-    qx = torch.where(cond2, qx_case2, qx)
-    qy = torch.where(cond2, qy_case2, qy)
-    qz = torch.where(cond2, qz_case2, qz)
-
-    # 条件 3: 非cond1 且 非cond2 且 (R[1,1] > R[2,2])
-    cond3 = ~cond1 & ~cond2 & (R[1,1] > R[2,2])
-    qw = torch.where(cond3, qw_case3, qw)
-    qx = torch.where(cond3, qx_case3, qx)
-    qy = torch.where(cond3, qy_case3, qy)
-    qz = torch.where(cond3, qz_case3, qz)
-    
-    # 条件 4: 非cond1 且 非cond2 且 非cond3 (即 R[2,2] 是最大元素或者所有对角线元素相等的情况)
-    cond4 = ~cond1 & ~cond2 & ~cond3
-    qw = torch.where(cond4, qw_case4, qw)
-    qx = torch.where(cond4, qx_case4, qx)
-    qy = torch.where(cond4, qy_case4, qy)
-    qz = torch.where(cond4, qz_case4, qz)
-
-    return torch.stack([qx, qy, qz, qw]) # 返回四元数 [qx, qy, qz, qw]
+    return torch.stack([yaw, pitch, roll])
 
 #! 计算误差向量和优化参数之间的雅可比矩阵
 def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
@@ -324,8 +328,16 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
         q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
         q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
         
+        # 将误差四元数转换为欧拉角误差 [yaw, pitch, roll]
+        error_quaternion = torch.stack([q_err_x, q_err_y, q_err_z, q_err_w])
+        # 归一化误差四元数
+        norm_error_q = torch.linalg.norm(error_quaternion)
+        if norm_error_q > 1e-9:
+            error_quaternion_normalized = error_quaternion / norm_error_q
+        else:
+            error_quaternion_normalized = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params_tensor.dtype, device=params_tensor.device)
 
-        orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
+        orient_error = _quaternion_to_euler_angles_torch(error_quaternion_normalized) 
         
         #* 5. 组合误差向量
         error_before_weight = torch.cat([pos_error, orient_error])
@@ -355,8 +367,8 @@ if __name__ == '__main__':
     save_jacobian_to_csv(jacobian)
     print("雅可比矩阵已保存（第一组）。")
 
-    #* 预测工具位姿在激光坐标系下
-    print("\n--- 预测工具位姿在激光坐标系下（前5组关节角） ---")
+    #* 预测工具位姿在激光坐标系下 和 计算并打印姿态误差
+    print("\n--- 预测工具位姿在激光坐标系下并计算姿态误差（前5组关节角） ---")
     params_for_fk_torch = initial_params_torch[0:31]
     t_laser_base_pos_torch = initial_params_torch[31:34]
     t_laser_base_quat_torch = initial_params_torch[34:38]
@@ -384,6 +396,41 @@ if __name__ == '__main__':
         pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_frame_torch)
         pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()
         print(f"预测位姿在激光坐标系下 (x,y,z,rx,ry,rz): {pose_pred_in_laser_np.tolist()}")
+
+        # 计算姿态误差 (将 T_meas_torch 的定义提前，确保位置和姿态误差都使用它)
+        T_meas_torch = torch.as_tensor(all_T_laser_tool_measured_np[i], dtype=torch.float64)
+
+        # 计算位置误差
+        pos_pred_in_laser = T_pred_in_laser_frame_torch[0:3, 3]
+        pos_measured_in_laser = T_meas_torch[0:3, 3] 
+        pos_error = pos_pred_in_laser - pos_measured_in_laser
+        print(f"  样本 {i+1} - 位置误差 (dx, dy, dz): [{pos_error[0]:.4f}, {pos_error[1]:.4f}, {pos_error[2]:.4f}]")
+        
+        R_pred = T_pred_in_laser_frame_torch[0:3, 0:3]
+        R_meas = T_meas_torch[0:3, 0:3]
+
+        q_pred = _rotation_matrix_to_quaternion_torch(R_pred)
+        q_meas = _rotation_matrix_to_quaternion_torch(R_meas)
+
+        q_meas_conj_x = -q_meas[0]
+        q_meas_conj_y = -q_meas[1]
+        q_meas_conj_z = -q_meas[2]
+        q_meas_conj_w =  q_meas[3]
+
+        q_err_w = q_pred[3] * q_meas_conj_w - q_pred[0] * q_meas_conj_x - q_pred[1] * q_meas_conj_y - q_pred[2] * q_meas_conj_z
+        q_err_x = q_pred[3] * q_meas_conj_x + q_pred[0] * q_meas_conj_w + q_pred[1] * q_meas_conj_z - q_pred[2] * q_meas_conj_y
+        q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
+        q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
+        
+        error_quaternion = torch.stack([q_err_x, q_err_y, q_err_z, q_err_w])
+        norm_error_q = torch.linalg.norm(error_quaternion)
+        if norm_error_q > 1e-9:
+            error_quaternion_normalized = error_quaternion / norm_error_q
+        else:
+            error_quaternion_normalized = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=initial_params_torch.dtype, device=initial_params_torch.device)
+
+        orient_error_euler = _quaternion_to_euler_angles_torch(error_quaternion_normalized) 
+        print(f"  样本 {i+1} - 姿态误差 (yaw, pitch, roll): [{orient_error_euler[0]:.4f}, {orient_error_euler[1]:.4f}, {orient_error_euler[2]:.4f}]")
 
    
     

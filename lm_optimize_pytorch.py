@@ -15,7 +15,7 @@ from jacobian_torch import (
 )
 
 #* 固定的参数索引(为空则是全优化)
-ALL_FIXED_INDICES = [] 
+ALL_FIXED_INDICES = [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37] 
 
 #! 将旋转矩阵转换为四元数
 def _rotation_matrix_to_quaternion(R_matrix):
@@ -54,6 +54,30 @@ def _rotation_matrix_to_quaternion(R_matrix):
     else: 
         q = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=R_matrix.dtype, device=R_matrix.device)
     return q 
+
+#! 将四元数转换为欧拉角 (ZYX顺序: yaw, pitch, roll)
+def _quaternion_to_euler_angles(q):
+    # q is [qx, qy, qz, qw]
+    qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (qw * qx + qy * qz)
+    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2 * (qw * qy - qz * qx)
+    if torch.abs(sinp) >= 1:
+        pitch = torch.copysign(torch.pi / 2, sinp) # use 90 degrees if out of range
+    else:
+        pitch = torch.asin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (qw * qz + qx * qy)
+    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+    yaw = torch.atan2(siny_cosp, cosy_cosp)
+
+    return torch.stack([yaw, pitch, roll])
 
 #! 计算单组数据的误差向量（加权重）
 def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
@@ -112,8 +136,18 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     q_err_y = q_pred[3] * q_meas_conj_y - q_pred[0] * q_meas_conj_z + q_pred[1] * q_meas_conj_w + q_pred[2] * q_meas_conj_x
     q_err_z = q_pred[3] * q_meas_conj_z + q_pred[0] * q_meas_conj_y - q_pred[1] * q_meas_conj_x + q_pred[2] * q_meas_conj_w
 
-    #* 计算误差旋转
-    orient_error = torch.stack([q_err_x, q_err_y, q_err_z])
+    #* 将误差四元数转换为欧拉角误差 [yaw, pitch, roll]
+    error_quaternion = torch.stack([q_err_x, q_err_y, q_err_z, q_err_w])
+    # 归一化误差四元数
+    norm_error_q = torch.linalg.norm(error_quaternion)
+    if norm_error_q > 1e-9:
+        error_quaternion_normalized = error_quaternion / norm_error_q
+    else:
+        # 如果模长接近于零，说明旋转很小，或者q_pred和q_meas非常接近，欧拉角误差也接近于零
+        error_quaternion_normalized = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
+
+    orient_error = _quaternion_to_euler_angles(error_quaternion_normalized) # 使用欧拉角作为方向误差
+    
     combined_error = torch.cat((pos_error, orient_error))
     return combined_error * torch.as_tensor(weights, dtype=torch.float64)
 
@@ -436,9 +470,9 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=3,      # 最大交替迭代次数
+        max_alt_iterations=2,      # 最大交替迭代次数
         convergence_tol=1e-6,      # 收敛阈值
-        max_sub_iterations=10,     # 每次子优化的最大迭代次数
+        max_sub_iterations=5,     # 每次子优化的最大迭代次数
         lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
         lambda_init_group2=0.01   # 第二组参数初始阻尼因子
     )

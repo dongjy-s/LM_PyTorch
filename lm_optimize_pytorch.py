@@ -15,10 +15,19 @@ from jacobian_torch import (
 )
 
 #* 固定的参数索引(为空则是全优化)
-ALL_FIXED_INDICES = [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37] 
+ALL_FIXED_INDICES = [] 
 
 #! 将旋转矩阵转换为四元数
 def _rotation_matrix_to_quaternion(R_matrix):
+    """ 
+    旋转矩阵转换为四元数公式：
+        R = [rx, ry, rz]
+        q = [qx, qy, qz, qw]
+        qx = (R[2,1] - R[1,2]) / S
+        qy = (R[0,2] - R[2,0]) / S
+        qz = (R[1,0] - R[0,1]) / S
+        qw = (R[0,0] + R[1,1] + R[2,2] + 1) / 4
+    """
     if not torch.is_tensor(R_matrix):
         R_matrix = torch.as_tensor(R_matrix, dtype=torch.float64)
     q = torch.zeros(4, dtype=R_matrix.dtype, device=R_matrix.device)
@@ -57,22 +66,27 @@ def _rotation_matrix_to_quaternion(R_matrix):
 
 #! 将四元数转换为欧拉角 (ZYX顺序: yaw, pitch, roll)
 def _quaternion_to_euler_angles(q):
-    # q is [qx, qy, qz, qw]
+    """ 
+    四元数转换为欧拉角公式：
+        q = [qx, qy, qz, qw]
+        roll = atan2(sinr_cosp, cosr_cosp)
+        pitch = asin(sinp)
+        yaw = atan2(siny_cosp, cosy_cosp)
+    """
     qx, qy, qz, qw = q[0], q[1], q[2], q[3]
 
-    # Roll (x-axis rotation)
+ 
     sinr_cosp = 2 * (qw * qx + qy * qz)
     cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
     roll = torch.atan2(sinr_cosp, cosr_cosp)
 
-    # Pitch (y-axis rotation)
     sinp = 2 * (qw * qy - qz * qx)
     if torch.abs(sinp) >= 1:
-        pitch = torch.copysign(torch.pi / 2, sinp) # use 90 degrees if out of range
+        pitch = torch.copysign(torch.pi / 2, sinp) 
     else:
         pitch = torch.asin(sinp)
 
-    # Yaw (z-axis rotation)
+   
     siny_cosp = 2 * (qw * qz + qx * qy)
     cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
     yaw = torch.atan2(siny_cosp, cosy_cosp)
@@ -470,11 +484,11 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=2,      # 最大交替迭代次数
+        max_alt_iterations=4,      # 最大交替迭代次数
         convergence_tol=1e-6,      # 收敛阈值
         max_sub_iterations=5,     # 每次子优化的最大迭代次数
-        lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
-        lambda_init_group2=0.01   # 第二组参数初始阻尼因子
+        lambda_init_group1=100,   # 第一组参数初始阻尼因子
+        lambda_init_group2=1   # 第二组参数初始阻尼因子
     )
 
     # 保存优化结果 

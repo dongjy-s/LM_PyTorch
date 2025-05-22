@@ -1,6 +1,8 @@
 import os
 import numpy as np
 import torch
+import csv
+from datetime import datetime
 from jacobian_torch import (
     compute_error_vector_jacobian, 
     forward_kinematics_T, 
@@ -219,9 +221,44 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
             f.write(f"{name},{value:.6f}\n")
     print(f"优化后的激光跟踪仪-基座变换参数已保存到: {t_laser_base_filepath}")
 
+#! 保存delta值到CSV文件
+def save_delta_to_csv(delta, iteration, opt_indices, csv_file, lambda_val=None, error_val=None, alt_iteration=None, opt_step=None):
+    """
+    将delta值保存到CSV文件
+    
+    参数:
+    delta: 参数更新量
+    iteration: 当前迭代次数
+    opt_indices: 可优化参数的索引
+    csv_file: CSV文件路径
+    lambda_val: 当前阻尼因子值（可选）
+    error_val: 当前误差值（可选）
+    alt_iteration: 交替优化循环次数（可选）
+    opt_step: 优化步骤（1或2，可选）
+    """
+    try:
+        # 创建目录（如果不存在）
+        csv_dir = os.path.dirname(csv_file)
+        if csv_dir and not os.path.exists(csv_dir):
+            os.makedirs(csv_dir)
+            
+        # 创建完整的delta数组（38个参数）
+        full_delta = np.zeros(38)
+        for i, idx in enumerate(opt_indices):
+            full_delta[idx] = delta[i]
+        
+        # 写入CSV文件
+        with open(csv_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            row = []
+            # 只添加delta值，不添加迭代信息、lambda和误差值
+            row.extend(full_delta)
+            writer.writerow(row)
+    except Exception as e:
+        print(f"保存delta值到CSV文件时出错: {e}")
 
 #! LM优化
-def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, max_theta_delta_rad=None):
+def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, max_theta_delta_rad=None, csv_file=None, alt_iteration=None, opt_step=None):
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
     #* 初始化阻尼因子
     lambda_val = lambda_init
@@ -327,6 +364,12 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         params[34:38] = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=params.dtype, device=params.device)
                         print("警告: 激光跟踪仪-基座四元数模长接近于零，已重置为[0,0,0,1]")
 
+                # 保存delta值到CSV文件
+                if csv_file is not None:
+                    save_delta_to_csv(delta.numpy(), iteration+1, opt_indices, csv_file, 
+                                     lambda_val=lambda_val, error_val=current_avg_error.item(), 
+                                     alt_iteration=alt_iteration, opt_step=opt_step)
+
                 print(f"迭代 {iteration+1}: 均方根误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
             else:
                 lambda_val *= 10
@@ -351,11 +394,42 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
 
 #! 交替优化函数
 def alternate_optimize_parameters(initial_params, max_alt_iterations=10, convergence_tol=1e-5, 
-                                 max_sub_iterations=30, lambda_init_group1=0.01, lambda_init_group2=0.001,
+                                 max_sub_iterations_group1=30, max_sub_iterations_group2=30, # 修改：为两组分别设置迭代次数
+                                 lambda_init_group1=0.01, lambda_init_group2=0.001,
                                  max_theta_delta_rad_for_sub_opt=None):
     print("\n" + "="*60)
     print(" "*20 + "开始交替优化")
     print("="*60)
+    
+    # 创建CSV文件保存delta值
+    csv_file = f"results/delta_values.csv"
+    
+    # 创建参数名称列表
+    param_names = []
+    for i in range(6):
+        for param in ["alpha", "a", "d", "theta_offset"]:
+            param_names.append(f"Joint{i+1}_{param}")
+    for param in ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]:
+        param_names.append(f"TCP_{param}")
+    for param in ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]:
+        param_names.append(f"Laser_{param}")
+    
+    # 初始化CSV文件
+    try:
+        # 创建目录（如果不存在）
+        csv_dir = os.path.dirname(csv_file)
+        if csv_dir and not os.path.exists(csv_dir):
+            os.makedirs(csv_dir)
+            
+        with open(csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # 只包含参数名称，不包含Iteration、Lambda和Error
+            header = param_names
+            writer.writerow(header)
+        print(f"Delta值将保存到: {csv_file}")
+    except Exception as e:
+        print(f"创建CSV文件时出错: {e}")
+        csv_file = None
     
     #* 读取关节角度和激光数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
@@ -391,10 +465,13 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         print("\n----- 第一步：优化DH参数 + TCP + 激光XYZ -----")
         params_step1 = optimize_dh_parameters(
             params, 
-            max_iterations=max_sub_iterations, 
+            max_iterations=max_sub_iterations_group1, # 修改：使用第一组的迭代次数
             lambda_init=lambda_init_group1, 
             opt_indices=opt_indices_group1,
-            max_theta_delta_rad=max_theta_delta_rad_for_sub_opt
+            max_theta_delta_rad=max_theta_delta_rad_for_sub_opt,
+            csv_file=csv_file,
+            alt_iteration=alt_iteration+1,
+            opt_step=1
         )
         
         #* 计算第一步优化后的误差    
@@ -405,9 +482,12 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         print("\n----- 第二步：优化激光四元数 -----")
         params_step2 = optimize_dh_parameters(
             params_step1, 
-            max_iterations=max_sub_iterations, 
+            max_iterations=max_sub_iterations_group2, # 修改：使用第二组的迭代次数
             lambda_init=lambda_init_group2, 
-            opt_indices=opt_indices_group2
+            opt_indices=opt_indices_group2,
+            csv_file=csv_file,
+            alt_iteration=alt_iteration+1,
+            opt_step=2
         )
         
         #* 计算第二步优化后的误差
@@ -500,11 +580,12 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=4,      # 最大交替迭代次数
-        convergence_tol=1e-6,      # 收敛阈值
-        max_sub_iterations=6,     # 每次子优化的最大迭代次数
+        max_alt_iterations=1,      # 最大交替迭代次数
+        convergence_tol=1e-5,      # 收敛阈值
+        max_sub_iterations_group1=100, # 修改：第一组子优化迭代次数
+        max_sub_iterations_group2=20, # 修改：第二组子优化迭代次数 (示例值)
         lambda_init_group1=100,   # 第一组参数初始阻尼因子
-        lambda_init_group2=1,   # 第二组参数初始阻尼因子
+        lambda_init_group2=1000,   # 第二组参数初始阻尼因子
         max_theta_delta_rad_for_sub_opt=max_theta_change_radians # 传递theta变化限制
     )
 

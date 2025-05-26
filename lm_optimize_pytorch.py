@@ -260,8 +260,9 @@ def save_delta_to_csv(delta, iteration, opt_indices, csv_file, lambda_val=None, 
 #! LM优化
 def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, max_theta_delta_rad=None, csv_file=None, alt_iteration=None, opt_step=None):
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
-    #* 初始化阻尼因子
+    #* 初始化阻尼因子和加速因子
     lambda_val = lambda_init
+    v_increase = 2  # 用于失败时增大lambda的加速因子
     #* 读取关节角度和激光数据
     joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
     laser_matrices = get_laser_tool_matrix()
@@ -337,12 +338,50 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             #* 计算新误差
             new_avg_error = compute_total_error_avg(params_new, joint_angles, laser_matrices)
             
-            #* 如果新的均方误差小于当前均方误差，则接受更新
-            if new_avg_error < current_avg_error:
+            #* 使用rho策略进行lambda更新
+            # 计算实际误差减少量（基于误差平方和）
+            old_error_squared = current_avg_error.item() ** 2 * n_samples  # 转换回总误差平方和
+            new_error_squared = new_avg_error.item() ** 2 * n_samples
+            actual_reduction = old_error_squared - new_error_squared
+            
+            # 计算预测误差减少量: delta^T * (lambda * delta + J^T * error_vector)
+            grad = JTe  # J^T * error_vector (注意这里JTe已经是-grad，所以实际是-J^T*e)
+            predicted_reduction = torch.dot(delta, lambda_val * delta - grad).item()  # 注意这里用-grad因为JTe=-grad
+            
+            # 计算rho（增益比）
+            if abs(predicted_reduction) > 1e-12:  # 避免除零
+                rho = actual_reduction / predicted_reduction
+            else:
+                rho = -1.0  # 强制拒绝更新
+            
+            print(f"  rho = {rho:.4f}, 实际减少: {actual_reduction:.6f}, 预测减少: {predicted_reduction:.6f}")
+            
+            # 设置rho接受阈值
+            rho_threshold = 0.0
+            
+            if rho > rho_threshold:  # 接受更新
                 params = params_new
                 current_avg_error = new_avg_error
-                lambda_val = max(lambda_val / 10, 1e-7)
+                
+                # 使用Nielsen策略更新lambda: lambda *= max(1/3, 1-(2*rho-1)^3)
+                tmp = 2 * rho - 1
+                factor = max(1.0/3.0, 1 - tmp * tmp * tmp)
+                lambda_val = lambda_val * factor
+                lambda_val = max(lambda_val, 1e-7)  # 设置下界
+                
                 update_success = True
+                print(f"  ✅ 接受更新, lambda: {lambda_val/factor:.4e} -> {lambda_val:.4e} (×{factor:.3f})")
+            else:  # 拒绝更新
+                # 增大lambda，使用加速惩罚
+                lambda_val = lambda_val * v_increase
+                old_v = v_increase
+                v_increase = v_increase * 2  # 加速因子加倍
+                update_success = False
+                print(f"  ❌ 拒绝更新, lambda: {lambda_val/old_v:.4e} -> {lambda_val:.4e} (×{old_v})")
+            
+            # 如果接受了更新，重置加速因子
+            if update_success:
+                v_increase = 2
 
                 #* TCP四元数归一化 
                 if any(idx in opt_indices for idx in range(27, 31)):
@@ -371,14 +410,11 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                                      alt_iteration=alt_iteration, opt_step=opt_step)
 
                 print(f"迭代 {iteration+1}: 均方根误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
-            else:
-                lambda_val *= 10
-                print(f"拒绝更新，增大阻尼因子 λ = {lambda_val}")
 
-                #* 如果阻尼因子超过一定阈值，提前结束优化
-                if lambda_val > 1e5:
-                    print(f"阻尼因子超过阈值 1e5，提前结束优化")
-                    return params.numpy()
+            #* 如果阻尼因子超过一定阈值，提前结束优化
+            if lambda_val > 1e5:
+                print(f"阻尼因子超过阈值 1e5，提前结束优化")
+                return params.numpy()
         if not update_success:
             print("内部迭代未收敛，继续主循环")
   
@@ -580,12 +616,12 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=1,      # 最大交替迭代次数
+        max_alt_iterations=4,      # 最大交替迭代次数
         convergence_tol=1e-5,      # 收敛阈值
-        max_sub_iterations_group1=100, # 修改：第一组子优化迭代次数
-        max_sub_iterations_group2=20, # 修改：第二组子优化迭代次数 (示例值)
-        lambda_init_group1=100,   # 第一组参数初始阻尼因子
-        lambda_init_group2=1000,   # 第二组参数初始阻尼因子
+        max_sub_iterations_group1=10, # 第一组子优化迭代次数
+        max_sub_iterations_group2=10, # 第二组子优化迭代次数 
+        lambda_init_group1=10,   # 第一组参数初始阻尼因子
+        lambda_init_group2=10,   # 第二组参数初始阻尼因子
         max_theta_delta_rad_for_sub_opt=max_theta_change_radians # 传递theta变化限制
     )
 

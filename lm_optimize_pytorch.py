@@ -258,7 +258,7 @@ def save_delta_to_csv(delta, iteration, opt_indices, csv_file, lambda_val=None, 
         print(f"保存delta值到CSV文件时出错: {e}")
 
 #! LM优化
-def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, max_theta_delta_rad=None, csv_file=None, alt_iteration=None, opt_step=None):
+def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, csv_file=None, alt_iteration=None, opt_step=None):
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
     #* 初始化阻尼因子和加速因子
     lambda_val = lambda_init
@@ -320,16 +320,6 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                     print(f"阻尼因子超过阈值，提前结束优化")
                     return params.numpy()
                 continue
-
-            # 应用参数更新限制 (例如，针对theta角)
-            if max_theta_delta_rad is not None:
-                theta_param_indices_in_full_params = [3, 7, 11, 15, 19, 23] # DH中theta_offset的索引
-                for i, param_idx_in_full_params_np_val in enumerate(opt_indices):
-                    param_idx_in_full_params = int(param_idx_in_full_params_np_val) # 将numpy类型转换为int
-                    if param_idx_in_full_params in theta_param_indices_in_full_params:
-                        current_delta_val = delta[i]
-                        # 将特定参数的更新量delta[i]限制在 [-max_theta_delta_rad, +max_theta_delta_rad] 范围内
-                        delta[i] = torch.clamp(current_delta_val, -max_theta_delta_rad, max_theta_delta_rad)
 
             #* 尝试更新
             params_new = params.clone()
@@ -431,8 +421,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
 #! 交替优化函数
 def alternate_optimize_parameters(initial_params, max_alt_iterations=10, convergence_tol=1e-5, 
                                  max_sub_iterations_group1=30, max_sub_iterations_group2=30, # 修改：为两组分别设置迭代次数
-                                 lambda_init_group1=0.01, lambda_init_group2=0.001,
-                                 max_theta_delta_rad_for_sub_opt=None):
+                                 lambda_init_group1=0.01, lambda_init_group2=0.001):
     print("\n" + "="*60)
     print(" "*20 + "开始交替优化")
     print("="*60)
@@ -504,7 +493,6 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
             max_iterations=max_sub_iterations_group1, # 修改：使用第一组的迭代次数
             lambda_init=lambda_init_group1, 
             opt_indices=opt_indices_group1,
-            max_theta_delta_rad=max_theta_delta_rad_for_sub_opt,
             csv_file=csv_file,
             alt_iteration=alt_iteration+1,
             opt_step=1
@@ -609,20 +597,15 @@ if __name__ == '__main__':
     print(f"固定参数索引 ({len(ALL_FIXED_INDICES)}): {ALL_FIXED_INDICES}")
     print(f"可优化参数索引 ({len(opt_indices)}): {opt_indices}")
     
-    # 定义theta参数单步最大变化量 (1度)
-    max_theta_change_degrees = 1.0
-    max_theta_change_radians = np.deg2rad(max_theta_change_degrees)
-
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
         max_alt_iterations=4,      # 最大交替迭代次数
-        convergence_tol=1e-5,      # 收敛阈值
+        convergence_tol=1e-3,      # 收敛阈值
         max_sub_iterations_group1=10, # 第一组子优化迭代次数
         max_sub_iterations_group2=10, # 第二组子优化迭代次数 
         lambda_init_group1=10,   # 第一组参数初始阻尼因子
         lambda_init_group2=10,   # 第二组参数初始阻尼因子
-        max_theta_delta_rad_for_sub_opt=max_theta_change_radians # 传递theta变化限制
     )
 
     # 保存优化结果 

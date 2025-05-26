@@ -168,6 +168,7 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     return combined_error * torch.as_tensor(weights, dtype=torch.float64)
 
 
+
 #! 计算所有样本的均方根误差
 def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
     total_error_sum_sq = 0.0 
@@ -220,6 +221,78 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
         for name, value in zip(t_laser_base_param_names, t_laser_base_params):
             f.write(f"{name},{value:.6f}\n")
     print(f"优化后的激光跟踪仪-基座变换参数已保存到: {t_laser_base_filepath}")
+
+#! 使用增广系统SVD求解LM问题
+def solve_lm_augmented_svd(J_opt, error_vector, lambda_val, damping_type="marquardt", svd_threshold=1e-12, verbose=False):
+    """
+    使用增广系统SVD求解Levenberg-Marquardt问题
+    
+    支持两种阻尼形式：
+    1. Marquardt阻尼：H = J^T*J + λ * diag(J^T*J) （适合多尺度参数）
+    2. Levenberg阻尼：H = J^T*J + λ * I （适合同尺度参数）
+    
+    参数:
+    J_opt: 雅可比矩阵（只包含可优化参数的列）
+    error_vector: 误差向量  
+    lambda_val: 阻尼因子
+    damping_type: "marquardt" 或 "levenberg"，阻尼类型
+    svd_threshold: 奇异值阈值，小于此值的奇异值被置零
+    verbose: 是否打印SVD诊断信息
+    
+    返回:
+    delta: 参数更新量
+    svd_info: SVD诊断信息字典
+    """
+    n_residuals, n_params = J_opt.shape
+    lambda_tensor = torch.tensor(lambda_val, dtype=J_opt.dtype, device=J_opt.device)
+    
+    if damping_type == "marquardt":
+        # Marquardt阻尼：H = J^T*J + λ * diag(J^T*J)
+        # 增广系统等价形式：[J; √(λ * diag(J^T*J))]
+        JTJ = torch.matmul(J_opt.transpose(0, 1), J_opt)
+        diag_JTJ = torch.diag(JTJ)
+        # 避免对角元素为零的情况（保护数值稳定性）
+        diag_JTJ = torch.where(diag_JTJ > 1e-12, diag_JTJ, torch.tensor(1e-12, dtype=J_opt.dtype, device=J_opt.device))
+        sqrt_diag = torch.sqrt(lambda_tensor * diag_JTJ)
+        regularization_matrix = torch.diag(sqrt_diag)
+    else:  # levenberg阻尼
+        # Levenberg阻尼：使用单位矩阵
+        sqrt_lambda = torch.sqrt(lambda_tensor)
+        regularization_matrix = sqrt_lambda * torch.eye(n_params, dtype=J_opt.dtype, device=J_opt.device)
+    
+    # 构建增广雅可比矩阵：[J; D^(1/2)]
+    J_aug = torch.vstack([J_opt, regularization_matrix])
+    
+    # 构建增广误差向量：[-e; 0] （注意负号，因为我们求解的是 min ||J*δ + e||²）
+    zero_vector = torch.zeros(n_params, dtype=error_vector.dtype, device=error_vector.device)
+    e_aug = torch.cat([-error_vector, zero_vector])
+    
+    # SVD分解
+    U, S, Vt = torch.linalg.svd(J_aug, full_matrices=False)
+    
+    # 处理奇异值：设置阈值避免数值不稳定
+    S_inv = torch.where(S > svd_threshold, 1.0/S, 0.0)
+    effective_rank = torch.sum(S > svd_threshold).item()
+    condition_number = S[0].item() / S[effective_rank-1].item() if effective_rank > 0 else float('inf')
+    
+    # 求解delta = V * S^(-1) * U^T * e_aug
+    delta = Vt.T @ torch.diag(S_inv) @ U.T @ e_aug
+    
+    # 构建诊断信息
+    svd_info = {
+        'max_singular_value': S[0].item(),
+        'min_singular_value': S[-1].item(),
+        'effective_rank': effective_rank,
+        'total_rank': len(S),
+        'condition_number': condition_number,
+        'lambda_val': lambda_val
+    }
+    
+    if verbose:
+        print(f"    SVD诊断: 有效秩={effective_rank}/{len(S)}, 条件数={condition_number:.2e}, "
+              f"λ={lambda_val:.2e}")
+    
+    return delta, svd_info
 
 #! 保存delta值到CSV文件
 def save_delta_to_csv(delta, iteration, opt_indices, csv_file, lambda_val=None, error_val=None, alt_iteration=None, opt_step=None):
@@ -297,24 +370,35 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
         #* 将所有雅可比矩阵堆叠成一个矩阵
         J = torch.vstack(all_jacobians)
 
-        #* LM算法公式：(J^T J + λ * diag(J^T J)) * Δθ = -J^T e
+        #* 使用增广SVD方法求解LM问题：更稳定的数值方法
         J_opt = J[:, opt_indices]
-        JTJ = torch.matmul(J_opt.transpose(0, 1), J_opt)
-        JTe = torch.matmul(J_opt.transpose(0, 1), error_vector)
         update_success = False
         inner_iterations = 0
         max_inner_iterations = 10
         while not update_success and inner_iterations < max_inner_iterations:
             inner_iterations += 1
             
-            #! 添加阻尼项
-            H = JTJ + lambda_val * torch.diag(torch.diag(JTJ))
-            
-            #! 计算更新量
+            #! 使用增广SVD求解delta（保持Marquardt阻尼形式）
             try:
-                delta = -torch.linalg.solve(H, JTe)
-            except:
-                print(f"矩阵求解错误，增大阻尼因子 λ = {lambda_val} -> {lambda_val * 10}")
+                delta, svd_info = solve_lm_augmented_svd(J_opt, error_vector, lambda_val, 
+                                                       damping_type="marquardt", verbose=True)
+                
+                # 检查SVD求解质量
+                if svd_info['effective_rank'] < len(opt_indices) * 0.8:
+                    print(f"警告: 有效秩({svd_info['effective_rank']})较低，可能存在参数冗余")
+                
+                if svd_info['condition_number'] > 1e12:
+                    print(f"警告: 条件数很大({svd_info['condition_number']:.2e})，增大阻尼因子")
+                    lambda_val *= 5
+                    if lambda_val > 1e8:
+                        print(f"阻尼因子超过阈值，提前结束优化")
+                        return params.numpy()
+                    continue
+                
+
+                    
+            except Exception as e:
+                print(f"SVD求解错误: {e}，增大阻尼因子 λ = {lambda_val} -> {lambda_val * 10}")
                 lambda_val *= 10
                 if lambda_val > 1e8:
                     print(f"阻尼因子超过阈值，提前结束优化")
@@ -335,7 +419,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             actual_reduction = old_error_squared - new_error_squared
             
             # 计算预测误差减少量: delta^T * (lambda * delta + J^T * error_vector)
-            grad = JTe  # J^T * error_vector (注意这里JTe已经是-grad，所以实际是-J^T*e)
+            JTe = torch.matmul(J_opt.transpose(0, 1), error_vector)  # 重新计算J^T * e
+            grad = JTe  # J^T * error_vector 
             predicted_reduction = torch.dot(delta, lambda_val * delta - grad).item()  # 注意这里用-grad因为JTe=-grad
             
             # 计算rho（增益比）
@@ -601,7 +686,7 @@ if __name__ == '__main__':
     optimized_params = alternate_optimize_parameters(
         initial_params, 
         max_alt_iterations=4,      # 最大交替迭代次数
-        convergence_tol=1e-3,      # 收敛阈值
+        convergence_tol=1e-4,      # 收敛阈值
         max_sub_iterations_group1=10, # 第一组子优化迭代次数
         max_sub_iterations_group2=10, # 第二组子优化迭代次数 
         lambda_init_group1=10,   # 第一组参数初始阻尼因子

@@ -12,8 +12,7 @@ from jacobian_torch import (
     INIT_T_LASER_BASE_PARAMS,
     INIT_DH_PARAMS,
     JOINT_ANGLE_FILE,
-    INIT_TOOL_OFFSET_POSITION,
-    INIT_TOOL_OFFSET_QUATERNION
+    INIT_TOOL_OFFSET_PARAMS
 )
 
 #* 固定的参数索引(为空则是全优化)
@@ -547,9 +546,9 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     
     #! 定义两组参数索引
     #* 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
-    all_indices_group1 = list(range(0, 34))  
+    all_indices_group1 = list(range(24,38))  
     #* 第二组：激光跟踪仪四元数
-    all_indices_group2 = list(range(34, 38))  
+    all_indices_group2 = list(range(0,24))  
    
     opt_indices_group1 = [idx for idx in all_indices_group1 if idx not in ALL_FIXED_INDICES]
     opt_indices_group2 = [idx for idx in all_indices_group2 if idx not in ALL_FIXED_INDICES]
@@ -674,7 +673,7 @@ def evaluate_optimization(initial_params, optimized_params):
 
 if __name__ == '__main__':
     initial_dh_params = np.array(INIT_DH_PARAMS)
-    initial_tcp_params = np.concatenate((INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
+    initial_tcp_params = np.array(INIT_TOOL_OFFSET_PARAMS)
     initial_params = np.concatenate((initial_dh_params, initial_tcp_params, INIT_T_LASER_BASE_PARAMS)) 
 
     # 排除固定参数
@@ -689,8 +688,8 @@ if __name__ == '__main__':
         convergence_tol=1e-4,      # 收敛阈值
         max_sub_iterations_group1=10, # 第一组子优化迭代次数
         max_sub_iterations_group2=10, # 第二组子优化迭代次数 
-        lambda_init_group1=10,   # 第一组参数初始阻尼因子
-        lambda_init_group2=10,   # 第二组参数初始阻尼因子
+        lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
+        lambda_init_group2=100,   # 第二组参数初始阻尼因子
     )
 
     # 保存优化结果 

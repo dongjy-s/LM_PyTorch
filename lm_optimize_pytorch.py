@@ -546,9 +546,9 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     
     #! 定义两组参数索引
     #* 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
-    all_indices_group1 = list(range(24,38))  
+    all_indices_group1 = list(range(0,34))  
     #* 第二组：激光跟踪仪四元数
-    all_indices_group2 = list(range(0,24))  
+    all_indices_group2 = list(range(34,38))  
    
     opt_indices_group1 = [idx for idx in all_indices_group1 if idx not in ALL_FIXED_INDICES]
     opt_indices_group2 = [idx for idx in all_indices_group2 if idx not in ALL_FIXED_INDICES]
@@ -688,8 +688,8 @@ if __name__ == '__main__':
         convergence_tol=1e-4,      # 收敛阈值
         max_sub_iterations_group1=10, # 第一组子优化迭代次数
         max_sub_iterations_group2=10, # 第二组子优化迭代次数 
-        lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
-        lambda_init_group2=100,   # 第二组参数初始阻尼因子
+        lambda_init_group1=2.0,   # 第一组参数初始阻尼因子
+        lambda_init_group2=0.001,   # 第二组参数初始阻尼因子
     )
 
     # 保存优化结果 

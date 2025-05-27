@@ -68,7 +68,7 @@ def _quaternion_to_euler_angles(q):
     # Pitch (y-axis rotation)
     sinp = 2 * (qw * qy - qz * qx)
     if torch.abs(sinp) >= 1:
-        pitch = torch.copysign(torch.pi / 2, sinp) # use 90 degrees if out of range
+        pitch = torch.copysign(torch.pi / 2, sinp) 
     else:
         pitch = torch.asin(sinp)
 
@@ -347,7 +347,7 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
     
     #! 初始化均方根误差
     params = np.array(initial_params)
-    current_avg_error_val = compute_total_error_avg(params, joint_angles, laser_matrices).item() # 已修改为计算平均误差, 使用 .item() 获取数值
+    current_avg_error_val = compute_total_error_avg(params, joint_angles, laser_matrices).item() 
     avg_initial_error_alternate = current_avg_error_val 
     print(f"初始均方根误差: {avg_initial_error_alternate:.6f}")
     
@@ -470,11 +470,11 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=2,      # 最大交替迭代次数
+        max_alt_iterations=4,      # 最大交替迭代次数
         convergence_tol=1e-6,      # 收敛阈值
-        max_sub_iterations=5,     # 每次子优化的最大迭代次数
-        lambda_init_group1=0.01,   # 第一组参数初始阻尼因子
-        lambda_init_group2=0.01   # 第二组参数初始阻尼因子
+        max_sub_iterations=10,     # 每次子优化的最大迭代次数
+        lambda_init_group1=100,   # 第一组参数初始阻尼因子
+        lambda_init_group2=1   # 第二组参数初始阻尼因子
     )
 
     # 保存优化结果 

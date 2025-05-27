@@ -12,8 +12,7 @@ from jacobian_torch import (
     INIT_T_LASER_BASE_PARAMS,
     INIT_DH_PARAMS,
     JOINT_ANGLE_FILE,
-    INIT_TOOL_OFFSET_POSITION,
-    INIT_TOOL_OFFSET_QUATERNION
+    INIT_TCP_PARAMS
 )
 
 #* 固定的参数索引(为空则是全优化)
@@ -674,7 +673,7 @@ def evaluate_optimization(initial_params, optimized_params):
 
 if __name__ == '__main__':
     initial_dh_params = np.array(INIT_DH_PARAMS)
-    initial_tcp_params = np.concatenate((INIT_TOOL_OFFSET_POSITION, INIT_TOOL_OFFSET_QUATERNION))
+    initial_tcp_params = np.array(INIT_TCP_PARAMS)
     initial_params = np.concatenate((initial_dh_params, initial_tcp_params, INIT_T_LASER_BASE_PARAMS)) 
 
     # 排除固定参数

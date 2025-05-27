@@ -33,12 +33,12 @@ JOINT_LIMITS = np.array([
     [-115, 115],
     [-175, 175]
 ])
-#! 初始TCP参数
-INIT_TOOL_OFFSET_POSITION = np.array([2.001192, -0.428111, 96.764181])
-INIT_TOOL_OFFSET_QUATERNION = np.array([0.706866, 0.000468, -0.003425, 0.707339])
+
+#! 初始TCP参数 [x, y, z, qx, qy, qz, qw]
+INIT_TCP_PARAMS = np.array([2.6017675202763124, -0.516417542673716, 96.29977729946617, 0.7071025164933159, -0.00021902658039405065, -0.0029320507112117924, 0.7071049330013219])
 
 #! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([2485.338605, 2913.227368, 36.016355,0.001320, 0.001561, -0.591506, 0.806298])
+INIT_T_LASER_BASE_PARAMS = np.array([2480.125230913006, 2904.1727345406794, 34.50399278528431, 0.0011072844243060346, 0.0007950723313289798, -0.5919299519653344, 0.8059882590630638])
 
 #! 把激光跟踪仪测量的位姿转换为 4 * 4 变换矩阵
 def get_laser_tool_matrix():
@@ -353,8 +353,7 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
 if __name__ == '__main__':
     initial_params_np = np.concatenate((
         INIT_DH_PARAMS, 
-        INIT_TOOL_OFFSET_POSITION, 
-        INIT_TOOL_OFFSET_QUATERNION,
+        INIT_TCP_PARAMS,
         INIT_T_LASER_BASE_PARAMS 
     ))
     initial_params_torch = torch.tensor(initial_params_np, dtype=torch.float64)

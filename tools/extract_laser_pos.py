@@ -53,7 +53,7 @@ if __name__ == "__main__":
     
     # 定义输入和输出文件的相对路径
     # 输入文件位于根目录下的 data 文件夹中
-    input_csv_path = os.path.join(project_root_dir, "data", "new_laser_pos.csv")
+    input_csv_path = os.path.join(project_root_dir, "data", "laser_pos.csv")
     # 输出文件也位于根目录下的 data 文件夹中
     output_csv_path = os.path.join(project_root_dir, "data", "extracted_laser_positions.csv")
 

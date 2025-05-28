@@ -58,7 +58,7 @@ if __name__ == "__main__":
     project_root_dir = os.path.dirname(current_script_dir)
  
     # 输入文件位于根目录下的 data 文件夹中
-    input_csv_path = os.path.join(project_root_dir, "data", "new_joint_angle.csv")
+    input_csv_path = os.path.join(project_root_dir, "data", "joint_angle.csv")
     # 输出文件也位于根目录下的 data 文件夹中
     output_csv_path = os.path.join(project_root_dir, "data", "extracted_joint_angles.csv")
 

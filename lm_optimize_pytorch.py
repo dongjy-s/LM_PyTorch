@@ -2,7 +2,6 @@ import os
 import numpy as np
 import torch
 import csv
-from datetime import datetime
 from jacobian_torch import (
     compute_error_vector_jacobian, 
     forward_kinematics_T, 
@@ -106,7 +105,7 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
     t_laser_base_quat = params_t[34:38] 
 
   
-    T_pred_robot_base = forward_kinematics_T(q_t, params_for_fk) 
+    T_pred_robot_base, _ = forward_kinematics_T(q_t, params_for_fk) 
 
     #* 构建T_laser_base变换矩阵（基座在激光坐标系下的位姿）
     R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat) 

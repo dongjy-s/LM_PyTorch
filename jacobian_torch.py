@@ -33,11 +33,63 @@ JOINT_LIMITS = np.array([
     [-115, 115],
     [-175, 175]
 ])
-#! 初始TCP参数 [x, y, z, qx, qy, qz, qw]
-INIT_TOOL_OFFSET_PARAMS = np.array([2.601768, -0.516418, 96.299777, 0.707103, -0.000219, -0.002932, 0.707105])
 
-#! 初始基座在激光跟踪仪坐标系下的位姿参数 [x, y, z, qx, qy, qz, qw]
-INIT_T_LASER_BASE_PARAMS = np.array([2480.125231, 2904.172735, 34.503993, 0.001107, 0.000795, -0.591930, 0.805988])
+#! 校准结果文件路径
+CALIBRATION_RESULTS_FILE = 'results/calibration_results.csv'
+
+#! 从校准结果文件读取参数
+def load_calibration_params():
+    """
+    从校准结果文件中读取基座和工具偏移参数
+    返回: (tool_offset_params, laser_base_params)
+    """
+    import ast
+    import os
+    
+    if not os.path.exists(CALIBRATION_RESULTS_FILE):
+        print(f"警告: 校准结果文件 {CALIBRATION_RESULTS_FILE} 不存在，使用默认值")
+        # 返回默认值
+        tool_default = np.array([2.601768, -0.516418, 96.299777, 0.707103, -0.000219, -0.002932, 0.707105])
+        base_default = np.array([2480.125231, 2904.172735, 34.503993, 0.001107, 0.000795, -0.591930, 0.805988])
+        return tool_default, base_default
+    
+    try:
+        with open(CALIBRATION_RESULTS_FILE, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        tool_offset_params = None
+        laser_base_params = None
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('base:'):
+                # 提取base参数
+                param_str = line.split(':', 1)[1].strip()
+                laser_base_params = np.array(ast.literal_eval(param_str))
+            elif line.startswith('tool:'):
+                # 提取tool参数  
+                param_str = line.split(':', 1)[1].strip()
+                tool_offset_params = np.array(ast.literal_eval(param_str))
+        
+        if tool_offset_params is None or laser_base_params is None:
+            raise ValueError("未能从文件中读取完整的校准参数")
+            
+        print(f"成功从 {CALIBRATION_RESULTS_FILE} 读取校准参数")
+        return tool_offset_params, laser_base_params
+        
+    except Exception as e:
+        print(f"读取校准结果文件时出错: {e}")
+        print("使用默认值")
+        # 返回默认值
+        tool_default = np.array([2.601768, -0.516418, 96.299777, 0.707103, -0.000219, -0.002932, 0.707105])
+        base_default = np.array([2480.125231, 2904.172735, 34.503993, 0.001107, 0.000795, -0.591930, 0.805988])
+        return tool_default, base_default
+
+#! 加载校准参数
+INIT_TOOL_OFFSET_PARAMS, INIT_T_LASER_BASE_PARAMS = load_calibration_params()
+
+print(f"使用的TCP参数: {INIT_TOOL_OFFSET_PARAMS}")
+print(f"使用的基座参数: {INIT_T_LASER_BASE_PARAMS}")
 
 #! 把激光跟踪仪测量的位姿转换为 4 * 4 变换矩阵
 def get_laser_tool_matrix():
@@ -163,8 +215,8 @@ def forward_kinematics_T(q_deg_array, params_torch):
     R_tool = quaternion_to_rotation_matrix(tool_offset_quaternion)
     T_flange_tool[0:3, 0:3] = R_tool
     T_base_tool = T_totle @ T_flange_tool
-    return T_base_tool
-    
+    return T_base_tool, T_totle
+
 #! 从变换矩阵提取6维位姿向量
 def extract_pose_from_T(T):
     position = T[0:3, 3]
@@ -291,7 +343,7 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
         t_laser_base_quat = params_tensor[34:38]
 
         #* 1. 计算机器人模型预测的工具在基座坐标系下的位姿
-        T_pred_robot_base = forward_kinematics_T(q_torch, params_for_fk)
+        T_pred_robot_base, _ = forward_kinematics_T(q_torch, params_for_fk)
         
         #* 2. 构建 T_laser_base 变换矩阵 (基座在激光坐标系下的位姿)
         R_laser_base = quaternion_to_rotation_matrix(t_laser_base_quat)
@@ -389,7 +441,7 @@ if __name__ == '__main__':
         q_torch = torch.as_tensor(q_deg_array_np, dtype=torch.float64)
 
         print(f"\n关节角度（度） {i+1}: {q_deg_array_np.tolist()}")
-        T_pred_robot_base_torch = forward_kinematics_T(q_torch, params_for_fk_torch)
+        T_pred_robot_base_torch, _ = forward_kinematics_T(q_torch, params_for_fk_torch)
         T_pred_in_laser_frame_torch = torch.matmul(T_laser_base_matrix_torch, T_pred_robot_base_torch)
         pose_pred_in_laser_torch = extract_pose_from_T(T_pred_in_laser_frame_torch)
         pose_pred_in_laser_np = pose_pred_in_laser_torch.detach().cpu().numpy()

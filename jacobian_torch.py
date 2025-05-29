@@ -3,8 +3,9 @@ import numpy as np
 import torch
 import torch.autograd.functional as F
 from tools.data_loader import (
-    get_laser_tool_matrix, load_joint_angles,  
-    ERROR_WEIGHTS,
+    get_laser_tool_matrix, 
+    load_joint_angles,  
+    get_error_weights,
     get_initial_params,
     load_joint_limits
 )
@@ -226,7 +227,10 @@ def _quaternion_to_euler_angles_torch(q):
     return torch.stack([yaw, pitch, roll])
 
 #! 计算误差向量和优化参数之间的雅可比矩阵
-def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
+def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=None):
+    # 如果没有提供权重，从配置获取
+    if weights is None:
+        weights = get_error_weights()
 
     #* 转为 torch 张量
     params_torch = torch.tensor(params, dtype=torch.float64, requires_grad=True)
@@ -309,7 +313,7 @@ if __name__ == '__main__':
 
     #* 计算雅可比矩阵
     print("--- 雅可比矩阵计算（第一组） ---")
-    jacobian = compute_error_vector_jacobian(initial_params_np, all_joint_angles_np[0], all_T_laser_tool_measured_np[0], ERROR_WEIGHTS)
+    jacobian = compute_error_vector_jacobian(initial_params_np, all_joint_angles_np[0], all_T_laser_tool_measured_np[0])
     save_jacobian_to_csv(jacobian)
     print("雅可比矩阵已保存（第一组）。")
 

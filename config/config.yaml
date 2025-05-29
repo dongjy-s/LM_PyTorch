@@ -1,0 +1,28 @@
+# 数据文件路径配置
+data_files:
+  # 原始数据文件
+  joint_angle_raw: 'data/joint_angle.csv'       # 原始关节角度文件
+  laser_pos_raw: 'data/laser_pos.csv'           # 原始激光位置文件
+  
+  # 参数文件  
+  dh_params: 'data/dh.csv'                      # DH参数文件
+  joint_limits: 'data/joint_limits.csv'         # 关节限位文件
+  
+  # 手眼标定初始值
+  calibration_results: 'data/hand_eye_calibration.csv'  # 校准结果文件
+
+# 机器人配置参数
+robot_config:
+
+  error_weights: [1.0, 1.0, 1.0, 0.01, 0.01, 0.01]
+ 
+  fixed_indices: []
+
+# 优化配置
+optimization:
+  # 最大迭代次数
+  max_iterations: 1000
+  # 收敛阈值
+  convergence_threshold: 1e-8
+  # 是否启用详细日志
+  verbose: true 

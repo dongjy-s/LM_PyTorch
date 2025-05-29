@@ -10,6 +10,8 @@
 - **基座参数**: 机器人基座在激光跟踪仪坐标系下的位姿
 
 ### 核心特性
+✅ **统一配置管理** - 基于YAML的配置文件系统，统一管理所有参数  
+✅ **直接原始数据处理** - 无需中间转换，直接处理机器人和激光跟踪仪原始数据  
 ✅ **多种雅可比计算方法** - PyTorch自动微分、解析计算、JAX实现  
 ✅ **AX=YB标定算法** - 基于OpenCV的机器人-传感器标定  
 ✅ **可视化分析** - 参数收敛过程和结果可视化  
@@ -21,18 +23,21 @@
 
 ```
 OptimizeDhParam/
+├── 📂 config.yaml                    # 主配置文件 (新增)
 ├── 📂 data/                           # 数据文件
 │   ├── joint_angle.csv               # 原始机器人关节角度数据 (控制器格式)
 │   ├── laser_pos.csv                 # 原始激光跟踪仪数据 (包含名义和测量值)
-│   ├── extracted_joint_angles.csv     # 提取后的标准关节角度数据
-│   └── extracted_laser_positions.csv  # 提取后的标准激光测量数据
+│   ├── dh.csv                        # DH参数文件
+│   └── joint_limits.csv              # 关节限位文件
 ├── 📂 tools/                          # 工具集
+│   ├── data_loader.py                # 数据加载器 (支持配置和直接原始数据提取)
 │   ├── calibrate.py                  # AX=YB标定算法
 │   ├── plot.py                       # 参数可视化工具
-│   ├── extract_joint_angle.py        # 关节角度提取工具
-│   └── extract_laser_pos.py          # 激光数据提取工具
+│   ├── extract_joint_angle.py        # 关节角度提取工具 (独立使用)
+│   └── extract_laser_pos.py          # 激光数据提取工具 (独立使用)
 ├── 📂 test/                           # 测试脚本
-│   └── test_error.py                 # RMSE误差分析
+│   ├── test_error.py                 # RMSE误差分析
+│   └── test_config.py                # 配置系统测试 (新增)
 ├── 📂 results/                        # 结果输出
 │   ├── optimized_dh_parameters.csv    # 优化后DH参数
 │   ├── optimized_tcp_parameters.csv   # 优化后TCP参数
@@ -66,9 +71,21 @@ pip install -r requirements.txt
 pip install matplotlib opencv-python jax
 ```
 
+### 配置项目
+
+1. **检查配置文件** (`config.yaml`)：
+   - 确认数据文件路径正确
+   - 根据需要调整误差权重
+   - 设置固定参数索引（如果需要）
+
+2. **测试配置系统**：
+```bash
+python test_config.py
+```
+
 ### 数据准备
 
-#### 方法1: 使用原始数据源（推荐）
+项目现在支持直接处理原始数据，无需手动转换：
 
 1. **原始关节角度数据** (`data/joint_angle.csv`)：
 从机器人控制器导出的原始格式：
@@ -84,29 +101,7 @@ LOCAL VAR jointtarget j2 = j:{	 19.087,39.061,-30.617,118.814,42.785,72.104,	0	}
 Motion1 2441.5012 1667.0849 390.6434 45.4983 -70.8809 -166.36 2441.5048 1667.1769 390.7169 45.4378 -70.8594 -166.2885 0.1178 0.0326
 ```
 
-3. **数据提取**：
-```bash
-# 从原始格式提取关节角度数据
-python tools/extract_joint_angle.py
-
-# 从原始格式提取激光测量数据
-python tools/extract_laser_pos.py
-```
-
-#### 方法2: 直接使用标准格式
-
-1. **准备关节角度数据** (`data/extracted_joint_angles.csv`)：
-```csv
-q1,q2,q3,q4,q5,q6
-0.0,0.0,0.0,0.0,0.0,0.0
-10.5,-20.1,30.2,5.0,-15.7,25.8
-```
-
-2. **准备激光测量数据** (`data/extracted_laser_positions.csv`)：
-```csv
-x,y,z,rx,ry,rz
-2500.0,3000.0,50.0,0.1,0.2,-0.3
-```
+**注意**：项目会自动从原始数据中提取所需信息，无需手动预处理。
 
 ### 执行标定
 
@@ -126,7 +121,32 @@ python test/test_error.py
 
 ## 🔧 核心功能详解
 
-### 1. 雅可比计算方法
+### 1. 统一数据加载器 (`tools/data_loader.py`)
+
+新的数据加载器集成了配置管理和原始数据处理：
+
+```python
+from tools.data_loader import (
+    load_config,           # 加载配置文件
+    get_error_weights,     # 获取误差权重
+    get_fixed_indices,     # 获取固定参数索引
+    load_joint_angles,     # 直接加载关节角度（从原始数据）
+    get_laser_tool_matrix, # 直接获取激光变换矩阵（从原始数据）
+)
+
+# 使用示例
+config = load_config('config.yaml')  # 可选：指定配置文件路径
+joint_angles = load_joint_angles()   # 自动从原始数据提取
+error_weights = get_error_weights()  # 从配置获取权重
+```
+
+**主要功能**：
+- 统一的配置管理接口
+- 直接从原始数据提取，跳过中间处理
+- 自动错误处理和数据验证
+- 保持与现有代码的兼容性
+
+### 2. 雅可比计算方法
 
 #### PyTorch自动微分 (`jacobian_torch.py`)
 - 利用PyTorch的自动微分机制，自动计算雅可比矩阵
@@ -149,7 +169,7 @@ jacobian_matrix = robot.compute_jacobian(joint_angles)
 - 集成DH参数、TCP参数和基座参数的优化
 - 提供完整的机器人运动学正解
 
-### 2. AX=YB标定算法 (`tools/calibrate.py`)
+### 3. AX=YB标定算法 (`tools/calibrate.py`)
 
 实现了经典的机器人手眼标定算法，用于同时求解：
 - **X**: 法兰到工具的变换 (Flange → Tool)
@@ -169,7 +189,7 @@ X, Y, Y_inv = calibrate_AX_equals_YB(A_list, B_list)
 - 自动处理数据预处理
 - 输出详细的标定结果和统计信息
 
-### 3. 可视化分析工具 (`tools/plot.py`)
+### 4. 可视化分析工具 (`tools/plot.py`)
 
 自动生成参数收敛过程的可视化图表：
 
@@ -187,7 +207,7 @@ python tools/plot.py
 - 对数坐标轴，便于观察小数值变化
 - 自动保存到 `graph/` 目录
 
-### 4. 数据提取工具
+### 5. 数据提取工具
 
 #### 关节角度提取 (`tools/extract_joint_angle.py`)
 **功能特点**：
@@ -226,7 +246,7 @@ x,y,z,rx,ry,rz
 2441.5048,1667.1769,390.7169,45.4378,-70.8594,-166.2885
 ```
 
-### 5. 高级优化策略
+### 6. 高级优化策略
 
 #### 交替优化算法
 ```python
@@ -271,44 +291,64 @@ python test/test_error.py
 - 收敛速度和振荡情况
 - 不同参数组的优化效果
 
-## ⚙️ 配置说明
+## ⚙️ 配置系统
 
-### DH参数配置 (`jacobian_torch.py`)
+### 配置文件结构 (`config.yaml`)
 
-```python
-# 修正DH参数：[alpha, a, d, theta_offset] (度, mm, mm, 度)
-INIT_DH_PARAMS = [
-    0, 0, 380, 0,      # 关节1
-    -90, 30, 0, -90,   # 关节2
-    0, 440, 0, 0,      # 关节3
-    -90, 35, 435, 0,   # 关节4
-    90, 0, 0, 0,       # 关节5
-    -90, 0, 83, 180    # 关节6
-]
+项目使用统一的YAML配置文件来管理所有参数，无需修改代码即可调整配置：
+
+```yaml
+# 数据文件路径配置
+data_files:
+  joint_angle_raw: 'data/joint_angle.csv'       # 原始关节角度文件
+  laser_pos_raw: 'data/laser_pos.csv'           # 原始激光位置文件
+  dh_params: 'data/dh.csv'                      # DH参数文件
+  joint_limits: 'data/joint_limits.csv'         # 关节限位文件
+  calibration_results: 'results/calibration_results.csv'  # 校准结果文件
+
+# 机器人配置参数
+robot_config:
+  error_weights: [1.0, 1.0, 1.0, 0.01, 0.01, 0.01]  # 误差权重
+  fixed_indices: []                              # 固定参数索引 (空=全优化)
+
+# 数据提取配置
+extraction:
+  joint_angle:
+    pattern: 'j:\s*{\s*([^}]*?)\s*}'            # 正则表达式模式
+    num_joints: 6                               # 关节数量
+    encoding: 'utf-8'                           # 文件编码
+  
+  laser_pos:
+    skip_header: true                           # 跳过表头
+    measurement_columns: [7, 8, 9, 10, 11, 12] # 测量数据列索引
+    delimiter: ' '                              # 数据分隔符
+    encoding: 'utf-8'                           # 文件编码
+
+# 优化配置
+optimization:
+  max_iterations: 1000                          # 最大迭代次数
+  convergence_threshold: 1e-8                   # 收敛阈值
+  verbose: true                                 # 详细日志
 ```
 
-### TCP参数配置
+### 配置系统特性
 
-```python
-# TCP相对于法兰的位姿：[tx, ty, tz, qx, qy, qz, qw] (mm, 四元数)
-INIT_TOOL_OFFSET_PARAMS = [0, 0, 100, 0, 0, 0, 1]
+**智能配置加载**：
+- 自动加载 `config.yaml` 配置文件
+- 如果配置文件不存在，自动使用内置默认配置
+- 支持运行时动态修改配置
+
+**参数固定功能**：
+```yaml
+# 示例：固定前3个DH参数和所有基座参数
+robot_config:
+  fixed_indices: [0, 1, 2, 30, 31, 32, 33, 34, 35, 36, 37]
 ```
 
-### 基座参数配置
-
-```python
-# 基座在激光坐标系中的位姿：[tx, ty, tz, qx, qy, qz, qw] (mm, 四元数)
-INIT_T_LASER_BASE_PARAMS = [0, 0, 0, 0, 0, 0, 1]
-```
-
-### 优化超参数
-
-```python
-# LM算法参数
-max_iterations = 100        # 最大迭代次数
-lambda_init = 1e-3         # 初始阻尼因子
-tolerance = 1e-8           # 收敛阈值
-```
+**数据格式配置**：
+- 支持不同机器人控制器的数据格式
+- 可配置激光跟踪仪数据列映射
+- 支持自定义分隔符和编码
 
 ## 📝 数据格式说明
 

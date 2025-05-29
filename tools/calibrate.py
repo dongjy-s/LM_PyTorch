@@ -3,76 +3,75 @@ import cv2
 import os
 import sys
 from scipy.spatial.transform import Rotation as R
-import pandas as pd
 import torch
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from jacobian_torch import forward_kinematics_T
-from data_loader import (
-    INIT_DH_PARAMS, load_calibration_params, 
-    JOINT_ANGLE_FILE, LASER_POS_FILE
+from jacobian_torch import  modified_dh_matrix
+from tools.data_loader import (
+    load_joint_angles,
+    extract_laser_positions_from_raw,
+    get_file_path,
+    load_dh_params
 )
 
-# 禁用科学计数法，使输出更易读
+
 np.set_printoptions(suppress=True, precision=6, floatmode='fixed')
 
-def calculate_T_flange(joint_angles_file=None):
-    """
-    使用 jacobian_torch 中的正运动学计算法兰变换矩阵
+def calculate_T_flange(joint_angles_data=None):
+    """计算基座到法兰的变换矩阵（只使用DH参数）"""
+    if joint_angles_data is None:
+        joint_angles_data = load_joint_angles()
     
-    参数:
-        joint_angles_file: 关节角度文件路径，如果为None则使用默认文件
-    
-    返回:
-        T_flange_list: 包含所有 T_flange (基座到法兰) 的列表
-    """
-    if joint_angles_file is None:
-        joint_angles_file = JOINT_ANGLE_FILE
-    
-    # 读取关节角度数据
-    joint_angles_data = pd.read_csv(joint_angles_file, header=None, skiprows=1).values
-    
-    # 从data_loader获取校准参数
-    INIT_TOOL_OFFSET_PARAMS, _ = load_calibration_params()
-    
-    # 构建初始参数（DH参数 + TCP参数）
-    initial_params = np.concatenate([INIT_DH_PARAMS, INIT_TOOL_OFFSET_PARAMS])
-    params_torch = torch.tensor(initial_params, dtype=torch.float64)
+    # 加载DH参数
+    dh_params = load_dh_params()
     
     T_flange_list = []
     
     # 遍历每组关节角度
     for i, joint_angles in enumerate(joint_angles_data):
         joint_angles_torch = torch.tensor(joint_angles, dtype=torch.float64)
+        dh_params_torch = torch.tensor(dh_params, dtype=torch.float64)
         
-        # 使用正运动学计算，返回 (T_base_tool, T_base_flange)
-        _, T_base_flange = forward_kinematics_T(joint_angles_torch, params_torch)
+        # 初始化累积变换矩阵
+        T_total = torch.eye(4, dtype=torch.float64)
         
-        # 转换为numpy数组并添加到列表
-        T_flange_numpy = T_base_flange.detach().numpy()
+        # 计算6个关节的DH变换
+        for j in range(6):
+            base_idx = j * 4
+            alpha_deg = dh_params_torch[base_idx]
+            a = dh_params_torch[base_idx + 1]
+            d = dh_params_torch[base_idx + 2]
+            theta_offset_deg = dh_params_torch[base_idx + 3]
+            
+            # 计算实际关节角度
+            actual_theta_deg = joint_angles_torch[j] + theta_offset_deg
+            actual_theta_rad = torch.deg2rad(actual_theta_deg)
+            alpha_rad = torch.deg2rad(alpha_deg)
+            
+            # 计算当前关节的DH变换矩阵
+            A_j = modified_dh_matrix(actual_theta_rad, alpha_rad, d, a)
+            
+            # 累积变换
+            T_total = T_total @ A_j
+        
+        # 转换为numpy并添加到列表
+        T_flange_numpy = T_total.detach().numpy()
         T_flange_list.append(T_flange_numpy)
         
-        print(f"第 {i+1} 组关节角度的法兰变换矩阵计算完成")
+        if (i + 1) % 10 == 0 or i == 0:
+            print(f"已计算 {i+1}/{len(joint_angles_data)} 个法兰变换矩阵")
     
     print(f"共计算了 {len(T_flange_list)} 个法兰变换矩阵")
     return T_flange_list
 
-def tool_pos_to_transform_matrix(tool_pos_list):
-    """
-    将 tool_pos_list 中的位姿数据转换为变换矩阵(xyz 内旋顺序)
-    
-    参数:
-        tool_pos_list: 包含多组位姿的二维列表，每组为 [x, y, z, rx, ry, rz]
-    
-    返回:
-        Tool_transform_matrix_list: 包含所有变换矩阵的列表
-    """
+def tool_pos_to_transform_matrix(tool_pos_data):
+
     Tool_transform_matrix_list = []
     
-    for pos in tool_pos_list:
+    for pos in tool_pos_data:
         x, y, z, rx, ry, rz = pos
         
         # 1. 处理旋转部分（xyz 内旋）
@@ -120,6 +119,7 @@ def calibrate_AX_equals_YB(A_list, B_list):
         Y: 求解得到的 Laser -> Base 变换矩阵 (4x4 numpy array)
         Y_inv: 求解得到的 Base -> Laser 变换矩阵，即Y的逆矩阵 (4x4 numpy array)
     """
+
     if len(A_list) != len(B_list) or len(A_list) < 3:
         raise ValueError("输入列表长度必须相同且至少为 3 (建议更多组非共面/共线的运动)")
 
@@ -140,14 +140,11 @@ def calibrate_AX_equals_YB(A_list, B_list):
         method=cv2.CALIB_HAND_EYE_PARK 
     )
 
-    # 组合 X (Flange -> Tool)
+   
     X = np.eye(4)
     X[:3, :3] = R_gripper2tool
     X[:3, 3] = t_gripper2tool.flatten()
-
-    # R_base2world, t_base2world 定义了从机器人基座到世界坐标系(激光跟踪仪)的变换
-    # 因此，这个变换是 Base -> Laser，根据约定，它应该是 Y_inv
-    # 组合 Y_inv (Base -> Laser/World)
+  
     Y_inv = np.eye(4)
     Y_inv[:3, :3] = R_base2world
     Y_inv[:3, 3] = t_base2world.flatten()
@@ -155,15 +152,13 @@ def calibrate_AX_equals_YB(A_list, B_list):
     # 计算 Y (Laser -> Base)，即 Y_inv 的逆矩阵
     Y = np.linalg.inv(Y_inv)
 
-    # 创建 results 目录（如果不存在）
-    os.makedirs('results', exist_ok=True)
 
     # 在控制台输出结果
     print(f"\n--- AX=YB 标定结果 (PARK 方法) ---")
     X_pos = X[:3, 3]
     X_rot = R.from_matrix(X[:3, :3])
     X_quat = X_rot.as_quat()
-    print("X (Laser -> Base):") # X 是激光跟踪仪到基座的变换
+    print("X (Flange -> Tool):") # X 是法兰到工具的变换
     print("  矩阵:")
     print(X)
     print(f"  平移 (x, y, z): {X_pos[0]:.6f}, {X_pos[1]:.6f}, {X_pos[2]:.6f}")
@@ -172,18 +167,26 @@ def calibrate_AX_equals_YB(A_list, B_list):
     Y_pos = Y[:3, 3]
     Y_rot = R.from_matrix(Y[:3, :3])
     Y_quat = Y_rot.as_quat()
-    print("\nY (Flange -> Tool):") # Y 是法兰到工具的变换
+    print("\nY (Laser -> Base):") # Y 是激光跟踪仪到基座的变换
     print("  矩阵:")
     print(Y)
     print(f"  平移 (x, y, z): {Y_pos[0]:.6f}, {Y_pos[1]:.6f}, {Y_pos[2]:.6f}")
     print(f"  旋转 (四元数 x, y, z, w): {Y_quat[0]:.6f}, {Y_quat[1]:.6f}, {Y_quat[2]:.6f}, {Y_quat[3]:.6f}")
 
-    # 保存标定结果到 CSV 文件
-    with open('results/calibration_results.csv', mode='w', encoding='utf-8') as file:
-        base_data = X_pos.tolist() + X_quat.tolist()
-        tool_data = Y_pos.tolist() + Y_quat.tolist()
-        file.write(f"base: {base_data}\n")
+    # 保存标定结果到配置的结果文件
+    results_file = get_file_path('calibration_results')
+    # 确保目录存在
+    os.makedirs(os.path.dirname(results_file), exist_ok=True)
+    
+    with open(results_file, mode='w', encoding='utf-8') as file:
+        # X 是 Flange -> Tool 变换 (工具偏移)
+        tool_data = X_pos.tolist() + X_quat.tolist()
+        # Y 是 Laser -> Base 变换 (与显示结果一致)
+        base_data = Y_pos.tolist() + Y_quat.tolist()
         file.write(f"tool: {tool_data}\n")
+        file.write(f"base: {base_data}\n")
+    
+    print(f"\n标定结果已保存到: {results_file}")
 
     return X, Y, Y_inv
 
@@ -191,21 +194,26 @@ def calibrate_AX_equals_YB(A_list, B_list):
 
 # 测试
 if __name__ == "__main__":
-    # 读取关节角度数据
-    df_joint_angles = pd.read_csv(JOINT_ANGLE_FILE, header=None, skiprows=1)
-    joint_angles_list = df_joint_angles.iloc[:, :6].values.tolist()
+    print("开始AX=YB标定...")
+    
+    # 直接从配置的原始数据文件中读取数据
+    joint_angles_data = load_joint_angles()
+    tool_pos_data = extract_laser_positions_from_raw()
+    
+    print(f"加载了 {joint_angles_data.shape[0]} 组关节角度数据")
+    print(f"加载了 {tool_pos_data.shape[0]} 组激光位置数据")
 
-    # 读取工具位姿数据
-    df_tool_pos = pd.read_csv(LASER_POS_FILE, header=None, skiprows=1)
-    tool_pos_list = df_tool_pos.iloc[:, :6].values.tolist()
+    # 计算法兰变换矩阵
+    T_flange_list = calculate_T_flange(joint_angles_data)
+    
+    # 将工具位姿转换为变换矩阵
+    Tool_transform_matrix_list = tool_pos_to_transform_matrix(tool_pos_data)
 
-    T_flange_list = calculate_T_flange()
-    Tool_transform_matrix_list = tool_pos_to_transform_matrix(tool_pos_list)
-
-
-    #! 调用 AX=YB 标定函数 (只使用 PARK 方法)
+    # 调用 AX=YB 标定函数 (只使用 PARK 方法)
     X_flange2tool, Y_laser2base, Y_inv_base2laser = calibrate_AX_equals_YB(
         T_flange_list, 
         Tool_transform_matrix_list
     )
+    
+    print("AX=YB标定完成！")
 

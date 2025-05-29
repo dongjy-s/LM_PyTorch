@@ -107,17 +107,13 @@ def get_file_path(key):
 
 def get_error_weights():
     """获取误差权重"""
-    global ERROR_WEIGHTS
-    if ERROR_WEIGHTS is None:
-        _ensure_config_loaded()
-    return ERROR_WEIGHTS
+    config = get_config()
+    return np.array(config['robot_config']['error_weights'])
 
 def get_fixed_indices():
     """获取固定参数索引"""
-    global ALL_FIXED_INDICES
-    if ALL_FIXED_INDICES is None:
-        _ensure_config_loaded()
-    return ALL_FIXED_INDICES
+    config = get_config()
+    return config['robot_config']['fixed_indices']
 
 def extract_joint_angles_from_raw(file_path=None):
     """直接从原始关节角度文件提取数据"""
@@ -466,34 +462,10 @@ def get_max_theta_change_radians():
     max_theta_degrees = constraints_config.get('max_theta_change_degrees', 1.0)
     return np.deg2rad(max_theta_degrees)
 
-# 延迟加载的全局变量，避免导入时重复输出
-def _get_error_weights():
-    """内部函数：获取误差权重"""
-    config = get_config()
-    return np.array(config['robot_config']['error_weights'])
-
-def _get_fixed_indices():
-    """内部函数：获取固定参数索引"""
-    config = get_config()
-    return config['robot_config']['fixed_indices']
-
-# 导出变量（向后兼容），在首次访问时才加载
-ERROR_WEIGHTS = None
-ALL_FIXED_INDICES = None
-
-def _ensure_config_loaded():
-    """确保配置已加载"""
-    global ERROR_WEIGHTS, ALL_FIXED_INDICES
-    if ERROR_WEIGHTS is None:
-        ERROR_WEIGHTS = _get_error_weights()
-        ALL_FIXED_INDICES = _get_fixed_indices()
-
 def clear_cache():
     """清理所有缓存，确保重新加载"""
-    global _config, _joint_limits_cache, ERROR_WEIGHTS, ALL_FIXED_INDICES
+    global _config, _joint_limits_cache
     _config = None
     _joint_limits_cache = None
-    ERROR_WEIGHTS = None
-    ALL_FIXED_INDICES = None
     print("🧹 已清理所有缓存")
 

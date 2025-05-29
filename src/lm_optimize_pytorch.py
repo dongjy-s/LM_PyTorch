@@ -1,7 +1,16 @@
 import os
+import sys
 import numpy as np
 import torch
 import csv
+
+# 添加上级目录到Python路径，以便导入tools模块
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+# 添加当前目录到Python路径，以便导入同目录下的模块
+sys.path.append(current_dir)
+
 from tools.data_loader import (
     load_joint_angles, get_initial_params, get_error_weights,
     get_fixed_indices, get_parameter_groups, get_optimizable_indices,
@@ -401,6 +410,9 @@ def optimize_dh_parameters(initial_params, max_iterations=None, lambda_init=None
     #* 初始化阻尼因子和加速因子
     lambda_val = lambda_init
     v_increase = 2  # 用于失败时增大lambda的加速因子
+    consecutive_failures = 0  # 连续失败次数计数器
+    max_consecutive_failures = 3  # 连续失败次数阈值
+    
     #* 读取关节角度和激光数据
     joint_angles = load_joint_angles()
     laser_matrices = get_laser_tool_matrix()
@@ -507,6 +519,7 @@ def optimize_dh_parameters(initial_params, max_iterations=None, lambda_init=None
             if rho > rho_threshold:  # 接受更新
                 params = params_new
                 current_avg_error = new_avg_error
+                consecutive_failures = 0  # 重置连续失败计数器
                 
                 # 使用Nielsen策略更新lambda: lambda *= max(1/3, 1-(2*rho-1)^3)
                 tmp = 2 * rho - 1
@@ -517,12 +530,19 @@ def optimize_dh_parameters(initial_params, max_iterations=None, lambda_init=None
                 update_success = True
                 print(f"  ✅ 接受更新, lambda: {lambda_val/factor:.4e} -> {lambda_val:.4e} (×{factor:.3f})")
             else:  # 拒绝更新
+                consecutive_failures += 1  # 增加连续失败计数器
+                
                 # 增大lambda，使用加速惩罚
                 lambda_val = lambda_val * v_increase
                 old_v = v_increase
                 v_increase = v_increase * 2  # 加速因子加倍
                 update_success = False
-                print(f"  ❌ 拒绝更新, lambda: {lambda_val/old_v:.4e} -> {lambda_val:.4e} (×{old_v})")
+                print(f"  ❌ 拒绝更新, lambda: {lambda_val/old_v:.4e} -> {lambda_val:.4e} (×{old_v}), 连续失败次数: {consecutive_failures}")
+                
+                # 检查连续失败次数是否达到阈值
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"连续失败 {consecutive_failures} 次，达到阈值 {max_consecutive_failures}，提前结束优化")
+                    return params.numpy()
             
             # 如果接受了更新，重置加速因子
             if update_success:

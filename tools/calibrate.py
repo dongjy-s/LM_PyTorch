@@ -9,7 +9,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from jacobian_torch import  modified_dh_matrix
+from src.jacobian_torch import  modified_dh_matrix
 from tools.data_loader import (
     load_joint_angles,
     extract_laser_positions_from_raw,

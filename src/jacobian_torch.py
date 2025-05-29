@@ -1,7 +1,14 @@
 import os
+import sys
 import numpy as np
 import torch
 import torch.autograd.functional as F
+
+# 添加上级目录到Python路径，以便导入tools模块
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
 from tools.data_loader import (
     get_laser_tool_matrix, 
     load_joint_angles,  

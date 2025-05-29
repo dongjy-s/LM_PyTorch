@@ -1,6 +1,5 @@
 import os
 import sys
-import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 # 添加项目根目录到路径
@@ -9,10 +8,10 @@ sys.path.append(current_dir)
 
 # 导入标定模块
 from tools.calibrate import calibrate_AX_equals_YB, calculate_T_flange, tool_pos_to_transform_matrix
-from tools.data_loader import load_joint_angles, extract_laser_positions_from_raw, get_initial_params, load_dh_params
+from tools.data_loader import load_joint_angles, extract_laser_positions_from_raw, get_initial_params
 
 # 导入LM优化模块
-from lm_optimize_pytorch import alternate_optimize_parameters
+from src.lm_optimize_pytorch import alternate_optimize_parameters
 
 def extract_optimized_params(optimized_params):
     """从优化后的参数中提取TCP和基座参数"""
@@ -45,7 +44,7 @@ def main():
         
         # AX=YB标定
         print("\n🎯 执行 AX=YB 标定...")
-        X, Y, Y_inv = calibrate_AX_equals_YB(T_flange_list, Tool_transform_matrix_list)
+        _, _, _ = calibrate_AX_equals_YB(T_flange_list, Tool_transform_matrix_list)
         
         # LM优化
         print("\n🚀 执行LM优化...")

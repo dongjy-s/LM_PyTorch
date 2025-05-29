@@ -10,12 +10,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from jacobian_torch import (
-    forward_kinematics_T,
-    INIT_DH_PARAMS,
-    INIT_TOOL_OFFSET_PARAMS,
-    JOINT_ANGLE_FILE,
-    LASER_POS_FILE
+from jacobian_torch import forward_kinematics_T
+from data_loader import (
+    INIT_DH_PARAMS, load_calibration_params, 
+    JOINT_ANGLE_FILE, LASER_POS_FILE
 )
 
 # 禁用科学计数法，使输出更易读
@@ -36,6 +34,9 @@ def calculate_T_flange(joint_angles_file=None):
     
     # 读取关节角度数据
     joint_angles_data = pd.read_csv(joint_angles_file, header=None, skiprows=1).values
+    
+    # 从data_loader获取校准参数
+    INIT_TOOL_OFFSET_PARAMS, _ = load_calibration_params()
     
     # 构建初始参数（DH参数 + TCP参数）
     initial_params = np.concatenate([INIT_DH_PARAMS, INIT_TOOL_OFFSET_PARAMS])

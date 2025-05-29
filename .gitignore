@@ -193,3 +193,14 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
+
+### Cursor Editor ###
+# Cursor编辑器配置目录和缓存文件
+.cursor/
+.cursor-settings.json
+cursor.log
+*.cursor-bak
+
+# Cursor AI相关的临时文件
+.cursor_ai/
+.cursor_chat/

@@ -2,114 +2,17 @@ import os
 import numpy as np
 import torch
 import torch.autograd.functional as F
-from scipy.spatial.transform import Rotation
-import pandas as pd
-
-#! 关节角度数据文件
-JOINT_ANGLE_FILE = 'data/extracted_joint_angles.csv'
-
-#! 激光跟踪仪测量数据文件
-LASER_POS_FILE = 'data/extracted_laser_positions.csv'
-
-#! 误差权重
-ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
-
-#! 待优化的DH参数: alpha, a, d, theta_offset 单位:mm,度
-INIT_DH_PARAMS = [
-    0, 0, 285.5, 0,
-    -90, 0, 0, -90,
-    180, 760, 0, -90,
-    -90, 0, 540, 0,
-    90, 0, 150, 0,
-    -90, 0, 127, 0
-]
-
-#! 关节限位(度)
-JOINT_LIMITS = np.array([
-    [-175, 175],
-    [-110, 110],
-    [-135, 135],
-    [-175, 175],
-    [-115, 115],
-    [-175, 175]
-])
-
-#! 校准结果文件路径
-CALIBRATION_RESULTS_FILE = 'results/calibration_results.csv'
-
-#! 从校准结果文件读取参数
-def load_calibration_params():
-    """
-    从校准结果文件中读取基座和工具偏移参数
-    返回: (tool_offset_params, laser_base_params)
-    """
-    import ast
-    import os
-    
-    if not os.path.exists(CALIBRATION_RESULTS_FILE):
-        print(f"警告: 校准结果文件 {CALIBRATION_RESULTS_FILE} 不存在，使用默认值")
-        # 返回默认值
-        tool_default = np.array([2.601768, -0.516418, 96.299777, 0.707103, -0.000219, -0.002932, 0.707105])
-        base_default = np.array([2480.125231, 2904.172735, 34.503993, 0.001107, 0.000795, -0.591930, 0.805988])
-        return tool_default, base_default
-    
-    try:
-        with open(CALIBRATION_RESULTS_FILE, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        tool_offset_params = None
-        laser_base_params = None
-        
-        for line in lines:
-            line = line.strip()
-            if line.startswith('base:'):
-                # 提取base参数
-                param_str = line.split(':', 1)[1].strip()
-                laser_base_params = np.array(ast.literal_eval(param_str))
-            elif line.startswith('tool:'):
-                # 提取tool参数  
-                param_str = line.split(':', 1)[1].strip()
-                tool_offset_params = np.array(ast.literal_eval(param_str))
-        
-        if tool_offset_params is None or laser_base_params is None:
-            raise ValueError("未能从文件中读取完整的校准参数")
-            
-        print(f"成功从 {CALIBRATION_RESULTS_FILE} 读取校准参数")
-        return tool_offset_params, laser_base_params
-        
-    except Exception as e:
-        print(f"读取校准结果文件时出错: {e}")
-        print("使用默认值")
-        # 返回默认值
-        tool_default = np.array([2.601768, -0.516418, 96.299777, 0.707103, -0.000219, -0.002932, 0.707105])
-        base_default = np.array([2480.125231, 2904.172735, 34.503993, 0.001107, 0.000795, -0.591930, 0.805988])
-        return tool_default, base_default
+from tools.data_loader import (
+    get_laser_tool_matrix, load_joint_angles, load_calibration_data, 
+    load_calibration_params, ERROR_WEIGHTS, INIT_DH_PARAMS, JOINT_LIMITS,
+    get_initial_params
+)
 
 #! 加载校准参数
 INIT_TOOL_OFFSET_PARAMS, INIT_T_LASER_BASE_PARAMS = load_calibration_params()
 
 print(f"使用的TCP参数: {INIT_TOOL_OFFSET_PARAMS}")
 print(f"使用的基座参数: {INIT_T_LASER_BASE_PARAMS}")
-
-#! 把激光跟踪仪测量的位姿转换为 4 * 4 变换矩阵
-def get_laser_tool_matrix():
-    laser_data = pd.read_csv(LASER_POS_FILE, delimiter=',', skiprows=1, header=None).values
-    num_samples = laser_data.shape[0]
-    laser_tool_matrix = np.zeros((num_samples, 4, 4))
-    
-    for i, data in enumerate(laser_data):
-        x, y, z, rx, ry, rz = data
-        
-        #* 计算旋转矩阵（xyz内旋）
-        R = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
-        
-        #* 创建变换矩阵
-        T = np.eye(4)
-        T[0:3, 0:3] = R
-        T[0:3, 3] = [x, y, z]
-        
-        laser_tool_matrix[i] = T
-    return laser_tool_matrix
 
 #! 构建MDH变换矩阵
 def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
@@ -402,14 +305,12 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
 
 #! 测试
 if __name__ == '__main__':
-    initial_params_np = np.concatenate((
-        INIT_DH_PARAMS, 
-        INIT_TOOL_OFFSET_PARAMS,
-        INIT_T_LASER_BASE_PARAMS 
-    ))
+    # 使用 data_loader 模块获取初始参数
+    initial_params_np = get_initial_params()
     initial_params_torch = torch.tensor(initial_params_np, dtype=torch.float64)
-    all_joint_angles_np = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    all_T_laser_tool_measured_np = get_laser_tool_matrix()
+    
+    # 使用 data_loader 模块加载数据
+    all_joint_angles_np, all_T_laser_tool_measured_np = load_calibration_data()
 
     #* 计算雅可比矩阵
     print("--- 雅可比矩阵计算（第一组） ---")

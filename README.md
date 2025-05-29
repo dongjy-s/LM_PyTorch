@@ -25,17 +25,14 @@ OptimizeDhParam/
 │   ├── joint_angle.csv               # 原始机器人关节角度数据 (控制器格式)
 │   ├── laser_pos.csv                 # 原始激光跟踪仪数据 (包含名义和测量值)
 │   ├── extracted_joint_angles.csv     # 提取后的标准关节角度数据
-│   ├── extracted_laser_positions.csv  # 提取后的标准激光测量数据
-│   └── dh.csv                         # DH参数配置文件
-├── 📂 jacobian/                       # 雅可比计算方法
-│   ├── jacobian_pytorch.py           # PyTorch自动微分实现
-│   ├── jacobian_analytical.py        # 解析雅可比计算
-│   └── jacobian_jax.py               # JAX实现版本
+│   └── extracted_laser_positions.csv  # 提取后的标准激光测量数据
 ├── 📂 tools/                          # 工具集
 │   ├── calibrate.py                  # AX=YB标定算法
 │   ├── plot.py                       # 参数可视化工具
 │   ├── extract_joint_angle.py        # 关节角度提取工具
 │   └── extract_laser_pos.py          # 激光数据提取工具
+├── 📂 test/                           # 测试脚本
+│   └── test_error.py                 # RMSE误差分析
 ├── 📂 results/                        # 结果输出
 │   ├── optimized_dh_parameters.csv    # 优化后DH参数
 │   ├── optimized_tcp_parameters.csv   # 优化后TCP参数
@@ -47,10 +44,8 @@ OptimizeDhParam/
 │   ├── tcp_params.png                # TCP参数收敛图
 │   ├── laser_position.png            # 激光位置参数图
 │   └── laser_orientation.png         # 激光姿态参数图
-├── 📂 test/                           # 测试脚本
-│   └── test_error.py                 # RMSE误差分析
-├── jacobian_torch.py                 # 核心运动学计算
-├── lm_optimize_pytorch.py            # LM优化算法
+├── jacobian_torch.py                 # 核心运动学计算和雅可比矩阵
+├── lm_optimize_pytorch.py            # LM优化算法主程序
 ├── requirements.txt                  # Python依赖
 └── README.md                         # 项目文档
 ```
@@ -131,31 +126,28 @@ python test/test_error.py
 
 ## 🔧 核心功能详解
 
-### 1. 多种雅可比计算方法
+### 1. 雅可比计算方法
 
-#### PyTorch自动微分 (`jacobian/jacobian_pytorch.py`)
-- 利用PyTorch的自动微分机制
+#### PyTorch自动微分 (`jacobian_torch.py`)
+- 利用PyTorch的自动微分机制，自动计算雅可比矩阵
 - 计算效率高，数值稳定性好
 - 适合大规模优化问题
-
-#### 解析雅可比计算 (`jacobian/jacobian_analytical.py`)
-- 手工推导的解析雅可比公式
-- 计算精度最高，无数值误差
-- 包含完整的MDH运动学实现
+- 集成了完整的机器人运动学正解
 
 ```python
-# 解析雅可比使用示例
-from jacobian.jacobian_analytical import RokaeRobot
+# PyTorch雅可比使用示例
+from jacobian_torch import RobotCalibration
 
-robot = RokaeRobot()
-joint_angles = [0, 0, 0, 0, 0, 0]  # 度
-jacobian_matrix = robot.build_jacobian_matrix(joint_angles)
+robot = RobotCalibration()
+joint_angles = torch.tensor([[0, 0, 0, 0, 0, 0]], dtype=torch.float64)  # 弧度
+jacobian_matrix = robot.compute_jacobian(joint_angles)
 ```
 
-#### JAX实现 (`jacobian/jacobian_jax.py`)
-- 基于JAX的函数式编程实现
-- 支持JIT编译，计算速度快
-- 适合研究和实验
+**核心功能**：
+- 自动微分计算雅可比矩阵
+- 支持批量处理多个关节角度
+- 集成DH参数、TCP参数和基座参数的优化
+- 提供完整的机器人运动学正解
 
 ### 2. AX=YB标定算法 (`tools/calibrate.py`)
 

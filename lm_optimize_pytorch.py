@@ -2,20 +2,15 @@ import os
 import numpy as np
 import torch
 import csv
+from tools.data_loader import (
+    load_calibration_data, get_initial_params, ERROR_WEIGHTS,
+    ALL_FIXED_INDICES, get_parameter_groups, get_optimizable_indices
+)
 from jacobian_torch import (
     compute_error_vector_jacobian, 
     forward_kinematics_T, 
-    get_laser_tool_matrix,
-    ERROR_WEIGHTS,
-    quaternion_to_rotation_matrix,
-    INIT_T_LASER_BASE_PARAMS,
-    INIT_DH_PARAMS,
-    JOINT_ANGLE_FILE,
-    INIT_TOOL_OFFSET_PARAMS
+    quaternion_to_rotation_matrix
 )
-
-#* 固定的参数索引(为空则是全优化)
-ALL_FIXED_INDICES = [] 
 
 #! 将旋转矩阵转换为四元数
 def _rotation_matrix_to_quaternion(R_matrix):
@@ -335,8 +330,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     lambda_val = lambda_init
     v_increase = 2  # 用于失败时增大lambda的加速因子
     #* 读取关节角度和激光数据
-    joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    laser_matrices = get_laser_tool_matrix()
+    joint_angles, laser_matrices = load_calibration_data()
     n_samples = len(joint_angles)
     if n_samples == 0:
         print("错误: 无法加载关节角度或激光数据，样本数量为0。")
@@ -550,17 +544,11 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         csv_file = None
     
     #* 读取关节角度和激光数据
-    joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    laser_matrices = get_laser_tool_matrix()
+    joint_angles, laser_matrices = load_calibration_data()
+    n_samples = len(joint_angles)
     
-    #! 定义两组参数索引
-    #* 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
-    all_indices_group1 = list(range(0,34))  
-    #* 第二组：激光跟踪仪四元数
-    all_indices_group2 = list(range(34,38))  
-   
-    opt_indices_group1 = [idx for idx in all_indices_group1 if idx not in ALL_FIXED_INDICES]
-    opt_indices_group2 = [idx for idx in all_indices_group2 if idx not in ALL_FIXED_INDICES]
+    #! 获取参数分组索引
+    opt_indices_group1, opt_indices_group2 = get_parameter_groups(exclude_fixed=True)
     
     #! 初始化均方根误差
     params = np.array(initial_params)
@@ -643,8 +631,7 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
 def evaluate_optimization(initial_params, optimized_params):
     """评估优化效果，报告与优化器目标一致的均方根误差"""
     # 读取数据
-    joint_angles = np.loadtxt(JOINT_ANGLE_FILE, delimiter=',', skiprows=1)
-    laser_matrices = get_laser_tool_matrix()
+    joint_angles, laser_matrices = load_calibration_data()
     n_samples = len(joint_angles)
 
     if n_samples == 0:
@@ -683,12 +670,11 @@ def evaluate_optimization(initial_params, optimized_params):
 
 
 if __name__ == '__main__':
-    initial_dh_params = np.array(INIT_DH_PARAMS)
-    initial_tcp_params = np.array(INIT_TOOL_OFFSET_PARAMS)
-    initial_params = np.concatenate((initial_dh_params, initial_tcp_params, INIT_T_LASER_BASE_PARAMS)) 
+    # 使用 data_loader 模块获取初始参数
+    initial_params = get_initial_params()
 
-    # 排除固定参数
-    opt_indices = [i for i in range(38) if i not in ALL_FIXED_INDICES]
+    # 获取可优化参数索引
+    opt_indices = get_optimizable_indices()
     print(f"固定参数索引 ({len(ALL_FIXED_INDICES)}): {ALL_FIXED_INDICES}")
     print(f"可优化参数索引 ({len(opt_indices)}): {opt_indices}")
     

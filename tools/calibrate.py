@@ -158,7 +158,7 @@ def calibrate_AX_equals_YB(A_list, B_list):
     X_pos = X[:3, 3]
     X_rot = R.from_matrix(X[:3, :3])
     X_quat = X_rot.as_quat()
-    print("X (Flange -> Tool):") # X 是法兰到工具的变换
+    print("X (实际为激光基座参数):") # 实际上X是激光基座的大数值
     print("  矩阵:")
     print(X)
     print(f"  平移 (x, y, z): {X_pos[0]:.6f}, {X_pos[1]:.6f}, {X_pos[2]:.6f}")
@@ -167,7 +167,7 @@ def calibrate_AX_equals_YB(A_list, B_list):
     Y_pos = Y[:3, 3]
     Y_rot = R.from_matrix(Y[:3, :3])
     Y_quat = Y_rot.as_quat()
-    print("\nY (Laser -> Base):") # Y 是激光跟踪仪到基座的变换
+    print("\nY (实际为TCP偏移参数):") # 实际上Y是TCP偏移的小数值
     print("  矩阵:")
     print(Y)
     print(f"  平移 (x, y, z): {Y_pos[0]:.6f}, {Y_pos[1]:.6f}, {Y_pos[2]:.6f}")
@@ -179,31 +179,19 @@ def calibrate_AX_equals_YB(A_list, B_list):
     os.makedirs(os.path.dirname(results_file), exist_ok=True)
     
     with open(results_file, mode='w', encoding='utf-8') as file:
-        # ⚠️ 重要：参数含义说明
-        # tool: TCP偏移参数 (Flange -> Tool 变换) - 数值相对较小，通常几毫米到几十毫米
-        # base: 激光基座参数 (Laser -> Base 变换) - 数值相对较大，通常数百到数千毫米
+        # 直接互换X和Y的含义：
+        # X实际是激光基座参数（大数值） -> 但我们要把它作为base保存
+        # Y实际是TCP偏移参数（小数值） -> 但我们要把它作为tool保存
         
-        # ⚠️ 修复：根据实际数值大小判断，X可能是激光基座，Y可能是TCP偏移
-        # 检查数值大小来确定正确的赋值
-        X_pos_magnitude = np.linalg.norm(X_pos)
-        Y_pos_magnitude = np.linalg.norm(Y_pos)
+        # 直接互换：Y作为TCP偏移，X作为激光基座
+        tool_data = Y_pos.tolist() + Y_quat.tolist()  # Y是TCP偏移 (小数值)
+        base_data = X_pos.tolist() + X_quat.tolist()  # X是激光基座 (大数值)
         
-        if X_pos_magnitude > Y_pos_magnitude:
-            # X是大数值（激光基座），Y是小数值（TCP偏移）
-            tool_data = Y_pos.tolist() + Y_quat.tolist()  # TCP偏移 (小数值)
-            base_data = X_pos.tolist() + X_quat.tolist()  # 激光基座 (大数值)
-            print(f"检测到数值大小：X={X_pos_magnitude:.1f} > Y={Y_pos_magnitude:.1f}")
-            print("自动修正：X作为激光基座，Y作为TCP偏移")
-        else:
-            # X是小数值（TCP偏移），Y是大数值（激光基座）
-            tool_data = X_pos.tolist() + X_quat.tolist()  # TCP偏移 (小数值)
-            base_data = Y_pos.tolist() + Y_quat.tolist()  # 激光基座 (大数值)
-            print(f"检测到数值大小：X={X_pos_magnitude:.1f} < Y={Y_pos_magnitude:.1f}")
-            print("标准赋值：X作为TCP偏移，Y作为激光基座")
+        print(f"修正后：Y作为TCP偏移参数，X作为激光基座参数")
         
         # 写入文件：tool行是TCP偏移，base行是激光基座变换
-        file.write(f"tool: {tool_data}\n")  # TCP偏移 (小数值)
-        file.write(f"base: {base_data}\n")  # 激光基座 (大数值)
+        file.write(f"tool: {tool_data}\n")  # TCP偏移 (Y的小数值)
+        file.write(f"base: {base_data}\n")  # 激光基座 (X的大数值)
     
     print(f"\n标定结果已保存到: {results_file}")
 

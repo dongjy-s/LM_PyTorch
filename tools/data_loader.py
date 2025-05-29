@@ -488,3 +488,12 @@ def _ensure_config_loaded():
         ERROR_WEIGHTS = _get_error_weights()
         ALL_FIXED_INDICES = _get_fixed_indices()
 
+def clear_cache():
+    """清理所有缓存，确保重新加载"""
+    global _config, _joint_limits_cache, ERROR_WEIGHTS, ALL_FIXED_INDICES
+    _config = None
+    _joint_limits_cache = None
+    ERROR_WEIGHTS = None
+    ALL_FIXED_INDICES = None
+    print("🧹 已清理所有缓存")
+

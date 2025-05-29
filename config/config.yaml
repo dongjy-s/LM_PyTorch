@@ -20,9 +20,31 @@ robot_config:
 
 # 优化配置
 optimization:
-  # 最大迭代次数
-  max_iterations: 1000
-  # 收敛阈值
-  convergence_threshold: 1e-8
-  # 是否启用详细日志
-  verbose: true 
+  # Levenberg-Marquardt 优化参数
+  lm_optimization:
+    # 交替优化设置
+    alternate_optimization:
+      max_alt_iterations: 4             # 交替优化最大循环次数
+      convergence_tol: 1e-5             # 交替优化收敛阈值
+      max_sub_iterations_group1: 10    # 第一组参数子优化最大迭代次数
+      max_sub_iterations_group2: 10     # 第二组参数子优化最大迭代次数
+    
+    # 阻尼参数设置
+    damping:
+      lambda_init_group1: 2.0           # 第一组参数初始阻尼因子
+      lambda_init_group2: 0.001         # 第二组参数初始阻尼因子
+      lambda_max: 1e8                   # 最大阻尼因子阈值
+      lambda_min: 1e-7                  # 最小阻尼因子阈值
+      damping_type: "marquardt"         # 阻尼类型: "marquardt" 或 "levenberg"
+    
+    # 参数约束
+    constraints:
+      max_theta_change_degrees: 1.0     # theta参数单步最大变化量(度)
+      enable_quaternion_normalization: true  # 是否启用四元数归一化
+    
+    # 输出设置
+    output:
+      save_delta_values: true           # 是否保存delta值到CSV
+      delta_csv_file: "results/delta_values.csv"  # delta值保存文件路径
+      save_optimization_results: true   # 是否保存优化结果
+      results_prefix: "results/optimized"  # 结果文件前缀 

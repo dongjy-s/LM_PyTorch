@@ -3,9 +3,12 @@ import numpy as np
 import torch
 import csv
 from tools.data_loader import (
-    load_joint_angles, get_initial_params, ERROR_WEIGHTS,
-    ALL_FIXED_INDICES, get_parameter_groups, get_optimizable_indices,
-    get_laser_tool_matrix
+    load_joint_angles, get_initial_params, get_error_weights,
+    get_fixed_indices, get_parameter_groups, get_optimizable_indices,
+    get_laser_tool_matrix,
+    get_alternate_optimization_config, get_damping_config, 
+    get_convergence_config, get_constraints_config,
+    get_output_config, get_max_theta_change_radians
 )
 from jacobian_torch import (
     compute_error_vector_jacobian, 
@@ -90,7 +93,11 @@ def _quaternion_to_euler_angles(q):
     return torch.stack([yaw, pitch, roll])
 
 #! 计算单组数据的误差向量（加权重）
-def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGHTS):
+def compute_error_vector(params, joint_angles, laser_matrix, weights=None):
+    # 如果没有提供权重，从配置获取
+    if weights is None:
+        weights = get_error_weights()
+        
     #* 获取关节角度和参数
     q_t = torch.as_tensor(joint_angles, dtype=torch.float64)
     params_t = torch.as_tensor(params, dtype=torch.float64) 
@@ -164,7 +171,11 @@ def compute_error_vector(params, joint_angles, laser_matrix, weights=ERROR_WEIGH
 
 
 #! 计算所有样本的均方根误差
-def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_WEIGHTS):
+def compute_total_error_avg(params, joint_angles, laser_matrices, weights=None):
+    # 如果没有提供权重，从配置获取
+    if weights is None:
+        weights = get_error_weights()
+        
     total_error_sum_sq = 0.0 
     n_samples = len(joint_angles)
     if n_samples == 0:
@@ -179,7 +190,19 @@ def compute_total_error_avg(params, joint_angles, laser_matrices, weights=ERROR_
     return torch.sqrt(mean_squared_error)
 
 #! 保存优化后的DH参数和TCP参数
-def save_optimization_results(params, filepath_prefix='results/optimized'):
+def save_optimization_results(params, filepath_prefix=None):
+    """
+    保存优化结果，路径可以从配置文件读取
+    
+    参数:
+    params: 优化后的参数
+    filepath_prefix: 文件路径前缀（None时从配置读取）
+    """
+    # 从配置文件读取默认路径
+    if filepath_prefix is None:
+        output_config = get_output_config()
+        filepath_prefix = output_config.get('results_prefix', 'results/optimized')
+    
     dirpath = os.path.dirname(filepath_prefix)
     if dirpath and not os.path.exists(dirpath):
         os.makedirs(dirpath)
@@ -217,7 +240,7 @@ def save_optimization_results(params, filepath_prefix='results/optimized'):
     print(f"优化后的激光跟踪仪-基座变换参数已保存到: {t_laser_base_filepath}")
 
 #! 使用增广系统SVD求解LM问题
-def solve_lm_augmented_svd(J_opt, error_vector, lambda_val, damping_type="marquardt", svd_threshold=1e-12, verbose=False):
+def solve_lm_augmented_svd(J_opt, error_vector, lambda_val, damping_type=None, svd_threshold=None, verbose=None):
     """
     使用增广系统SVD求解Levenberg-Marquardt问题
     
@@ -229,14 +252,23 @@ def solve_lm_augmented_svd(J_opt, error_vector, lambda_val, damping_type="marqua
     J_opt: 雅可比矩阵（只包含可优化参数的列）
     error_vector: 误差向量  
     lambda_val: 阻尼因子
-    damping_type: "marquardt" 或 "levenberg"，阻尼类型
-    svd_threshold: 奇异值阈值，小于此值的奇异值被置零
-    verbose: 是否打印SVD诊断信息
+    damping_type: "marquardt" 或 "levenberg"，阻尼类型（None时使用默认值）
+    svd_threshold: 奇异值阈值，小于此值的奇异值被置零（None时使用默认值）
+    verbose: 是否打印SVD诊断信息（None时使用默认值）
     
     返回:
     delta: 参数更新量
     svd_info: SVD诊断信息字典
     """
+    # 使用固定默认值
+    if damping_type is None:
+        damping_config = get_damping_config()
+        damping_type = damping_config.get('damping_type', 'marquardt')
+    if svd_threshold is None:
+        svd_threshold = 1e-12  # 固定默认值
+    if verbose is None:
+        verbose = True  # 固定默认值
+    
     n_residuals, n_params = J_opt.shape
     lambda_tensor = torch.tensor(lambda_val, dtype=J_opt.dtype, device=J_opt.device)
     
@@ -325,7 +357,46 @@ def save_delta_to_csv(delta, iteration, opt_indices, csv_file, lambda_val=None, 
         print(f"保存delta值到CSV文件时出错: {e}")
 
 #! LM优化
-def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, tol=1e-10, opt_indices=None, max_theta_delta_rad=None, csv_file=None, alt_iteration=None, opt_step=None):
+def optimize_dh_parameters(initial_params, max_iterations=None, lambda_init=None, tol=None, opt_indices=None, max_theta_delta_rad=None, csv_file=None, alt_iteration=None, opt_step=None):
+    """
+    LM优化函数，主要用于交替优化的子步骤
+    
+    参数:
+    initial_params: 初始参数值
+    max_iterations: 最大迭代次数（None时使用默认值50）
+    lambda_init: 初始阻尼因子（None时从配置读取）
+    tol: 收敛阈值（None时从配置读取）
+    opt_indices: 可优化参数索引（None时优化所有非固定参数）
+    max_theta_delta_rad: theta参数最大变化量（None时从配置读取）
+    csv_file: CSV输出文件（None时从配置读取）
+    alt_iteration: 交替优化轮次
+    opt_step: 优化步骤
+    """
+    # 从配置文件读取默认参数
+    damping_config = get_damping_config()
+    convergence_config = get_convergence_config()
+    constraints_config = get_constraints_config()
+    output_config = get_output_config()
+    
+    # 使用传入参数或配置/默认值
+    if max_iterations is None:
+        max_iterations = 50  # 固定默认值，适合子优化步骤
+    if lambda_init is None:
+        lambda_init = damping_config.get('lambda_init_default', 0.01)
+    if tol is None:
+        tol = convergence_config.get('parameter_tol', 1e-10)
+    if max_theta_delta_rad is None:
+        max_theta_delta_rad = get_max_theta_change_radians()
+    if csv_file is None and output_config.get('save_delta_values', True):
+        csv_file = output_config.get('delta_csv_file', 'results/delta_values.csv')
+    
+    # 获取其他配置参数
+    max_inner_iterations = convergence_config.get('max_inner_iterations', 10)
+    rho_threshold = convergence_config.get('rho_threshold', 0.0)
+    lambda_max = damping_config.get('lambda_max', 1e8)
+    lambda_min = damping_config.get('lambda_min', 1e-7)
+    enable_quat_norm = constraints_config.get('enable_quaternion_normalization', True)
+    
     params = torch.tensor(initial_params, dtype=torch.float64, requires_grad=False)
     #* 初始化阻尼因子和加速因子
     lambda_val = lambda_init
@@ -336,7 +407,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     n_samples = len(joint_angles)
     if n_samples == 0:
         print("错误: 无法加载关节角度或激光数据，样本数量为0。")
-        return initial_params 
+        return initial_params
     
     #* 记录初始均方根误差
     current_avg_error = compute_total_error_avg(params, joint_angles, laser_matrices) 
@@ -368,39 +439,37 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
         J_opt = J[:, opt_indices]
         update_success = False
         inner_iterations = 0
-        max_inner_iterations = 10
         while not update_success and inner_iterations < max_inner_iterations:
             inner_iterations += 1
             
-            #! 使用增广SVD求解delta（保持Marquardt阻尼形式）
+            #! 使用增广SVD求解delta（从配置读取阻尼类型）
             try:
-                delta, svd_info = solve_lm_augmented_svd(J_opt, error_vector, lambda_val, 
-                                                       damping_type="marquardt", verbose=True)
+                delta, svd_info = solve_lm_augmented_svd(J_opt, error_vector, lambda_val)
                 
                 # 检查SVD求解质量
                 if svd_info['effective_rank'] < len(opt_indices) * 0.8:
                     print(f"警告: 有效秩({svd_info['effective_rank']})较低，可能存在参数冗余")
                 
-                if svd_info['condition_number'] > 1e12:
+                # 使用固定的条件数阈值
+                condition_threshold = 1e12  # 固定默认值
+                if svd_info['condition_number'] > condition_threshold:
                     print(f"警告: 条件数很大({svd_info['condition_number']:.2e})，增大阻尼因子")
                     lambda_val *= 5
-                    if lambda_val > 1e8:
-                        print(f"阻尼因子超过阈值，提前结束优化")
+                    if lambda_val > lambda_max:
+                        print(f"阻尼因子超过阈值 {lambda_max}，提前结束优化")
                         return params.numpy()
                     continue
-                
 
-                    
             except Exception as e:
                 print(f"SVD求解错误: {e}，增大阻尼因子 λ = {lambda_val} -> {lambda_val * 10}")
                 lambda_val *= 10
-                if lambda_val > 1e8:
-                    print(f"阻尼因子超过阈值，提前结束优化")
+                if lambda_val > lambda_max:
+                    print(f"阻尼因子超过阈值 {lambda_max}，提前结束优化")
                     return params.numpy()
                 continue
 
             # 应用参数更新限制（针对theta角）
-            if max_theta_delta_rad is not None:
+            if max_theta_delta_rad is not None and max_theta_delta_rad > 0:
                 theta_param_indices_in_full_params = [3, 7, 11, 15, 19, 23]  # DH中theta_offset的索引
                 for i, param_idx_in_full_params_np_val in enumerate(opt_indices):
                     param_idx_in_full_params = int(param_idx_in_full_params_np_val)  # 将numpy类型转换为int
@@ -435,9 +504,6 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
             
             print(f"  rho = {rho:.4f}, 实际减少: {actual_reduction:.6f}, 预测减少: {predicted_reduction:.6f}")
             
-            # 设置rho接受阈值
-            rho_threshold = 0.0
-            
             if rho > rho_threshold:  # 接受更新
                 params = params_new
                 current_avg_error = new_avg_error
@@ -446,7 +512,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 tmp = 2 * rho - 1
                 factor = max(1.0/3.0, 1 - tmp * tmp * tmp)
                 lambda_val = lambda_val * factor
-                lambda_val = max(lambda_val, 1e-7)  # 设置下界
+                lambda_val = max(lambda_val, lambda_min)  # 使用配置的下界
                 
                 update_success = True
                 print(f"  ✅ 接受更新, lambda: {lambda_val/factor:.4e} -> {lambda_val:.4e} (×{factor:.3f})")
@@ -463,7 +529,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 v_increase = 2
 
                 #* TCP四元数归一化 
-                if any(idx in opt_indices for idx in range(27, 31)):
+                if enable_quat_norm and any(idx in opt_indices for idx in range(27, 31)):
                     q_tcp = params[27:31] 
                     norm_q_tcp = torch.linalg.norm(q_tcp)
                     if norm_q_tcp > 1e-9: 
@@ -473,7 +539,7 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                         print("警告: TCP四元数模长接近于零，已重置为[0,0,0,1]")
                 
                 #* 激光跟踪仪-基座四元数归一化 
-                if any(idx in opt_indices for idx in range(34, 38)):
+                if enable_quat_norm and any(idx in opt_indices for idx in range(34, 38)):
                     q_laser_base = params[34:38]
                     norm_q_laser_base = torch.linalg.norm(q_laser_base)
                     if norm_q_laser_base > 1e-9:
@@ -491,8 +557,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
                 print(f"迭代 {iteration+1}: 均方根误差 = {current_avg_error.item():.8f}, λ = {lambda_val:.4e}, \nΔθ (参数改变量) = {delta.numpy()}")            
 
             #* 如果阻尼因子超过一定阈值，提前结束优化
-            if lambda_val > 1e5:
-                print(f"阻尼因子超过阈值 1e5，提前结束优化")
+            if lambda_val > lambda_max * 0.1:  # 使用配置的90%作为警告阈值
+                print(f"阻尼因子超过阈值 {lambda_max * 0.1:.0e}，提前结束优化")
                 return params.numpy()
         if not update_success:
             print("内部迭代未收敛，继续主循环")
@@ -508,15 +574,51 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     return params.numpy()
 
 #! 交替优化函数
-def alternate_optimize_parameters(initial_params, max_alt_iterations=10, convergence_tol=1e-5, 
-                                 max_sub_iterations_group1=30, max_sub_iterations_group2=30, # 修改：为两组分别设置迭代次数
-                                 lambda_init_group1=0.01, lambda_init_group2=0.001, max_theta_delta_rad_for_sub_opt=None):
+def alternate_optimize_parameters(initial_params, max_alt_iterations=None, convergence_tol=None, 
+                                 max_sub_iterations_group1=None, max_sub_iterations_group2=None,
+                                 lambda_init_group1=None, lambda_init_group2=None, max_theta_delta_rad_for_sub_opt=None):
+    """
+    交替优化函数，参数可以从配置文件读取默认值
+    
+    参数:
+    initial_params: 初始参数值
+    max_alt_iterations: 最大交替迭代次数（None时从配置读取）
+    convergence_tol: 收敛阈值（None时从配置读取）
+    max_sub_iterations_group1: 第一组参数最大迭代次数（None时从配置读取）
+    max_sub_iterations_group2: 第二组参数最大迭代次数（None时从配置读取）
+    lambda_init_group1: 第一组参数初始阻尼因子（None时从配置读取）
+    lambda_init_group2: 第二组参数初始阻尼因子（None时从配置读取）
+    max_theta_delta_rad_for_sub_opt: theta参数最大变化量（None时从配置读取）
+    """
+    # 从配置文件读取默认参数
+    alt_config = get_alternate_optimization_config()
+    damping_config = get_damping_config()
+    output_config = get_output_config()
+    
+    # 使用传入参数或配置文件中的默认值
+    if max_alt_iterations is None:
+        max_alt_iterations = alt_config.get('max_alt_iterations', 4)
+    if convergence_tol is None:
+        convergence_tol = alt_config.get('convergence_tol', 1e-4)
+    if max_sub_iterations_group1 is None:
+        max_sub_iterations_group1 = alt_config.get('max_sub_iterations_group1', 10)
+    if max_sub_iterations_group2 is None:
+        max_sub_iterations_group2 = alt_config.get('max_sub_iterations_group2', 10)
+    if lambda_init_group1 is None:
+        lambda_init_group1 = damping_config.get('lambda_init_group1', 2.0)
+    if lambda_init_group2 is None:
+        lambda_init_group2 = damping_config.get('lambda_init_group2', 0.001)
+    if max_theta_delta_rad_for_sub_opt is None:
+        max_theta_delta_rad_for_sub_opt = get_max_theta_change_radians()
+    
     print("\n" + "="*60)
     print(" "*20 + "开始交替优化")
     print("="*60)
     
-    # 创建CSV文件保存delta值
-    csv_file = f"results/delta_values.csv"
+    # 从配置文件读取CSV文件路径
+    csv_file = None
+    if output_config.get('save_delta_values', True):
+        csv_file = output_config.get('delta_csv_file', 'results/delta_values.csv')
     
     # 创建参数名称列表
     param_names = []
@@ -529,21 +631,22 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         param_names.append(f"Laser_{param}")
     
     # 初始化CSV文件
-    try:
-        # 创建目录（如果不存在）
-        csv_dir = os.path.dirname(csv_file)
-        if csv_dir and not os.path.exists(csv_dir):
-            os.makedirs(csv_dir)
-            
-        with open(csv_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            # 只包含参数名称，不包含Iteration、Lambda和Error
-            header = param_names
-            writer.writerow(header)
-        print(f"Delta值将保存到: {csv_file}")
-    except Exception as e:
-        print(f"创建CSV文件时出错: {e}")
-        csv_file = None
+    if csv_file:
+        try:
+            # 创建目录（如果不存在）
+            csv_dir = os.path.dirname(csv_file)
+            if csv_dir and not os.path.exists(csv_dir):
+                os.makedirs(csv_dir)
+                
+            with open(csv_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                # 只包含参数名称，不包含Iteration、Lambda和Error
+                header = param_names
+                writer.writerow(header)
+            print(f"Delta值将保存到: {csv_file}")
+        except Exception as e:
+            print(f"创建CSV文件时出错: {e}")
+            csv_file = None
     
     #* 读取关节角度和激光数据
     joint_angles = load_joint_angles()
@@ -673,32 +776,23 @@ def evaluate_optimization(initial_params, optimized_params):
 
 
 if __name__ == '__main__':
-  
     initial_params = get_initial_params()
 
     # 获取可优化参数索引
     opt_indices = get_optimizable_indices()
-    print(f"固定参数索引 ({len(ALL_FIXED_INDICES)}): {ALL_FIXED_INDICES}")
+    fixed_indices = get_fixed_indices()  # 直接调用函数获取
+    print(f"固定参数索引 ({len(fixed_indices)}): {fixed_indices}")
     print(f"可优化参数索引 ({len(opt_indices)}): {opt_indices}")
     
-    # 定义theta参数单步最大变化量 (1度)
-    max_theta_change_degrees = 1.0
-    max_theta_change_radians = np.deg2rad(max_theta_change_degrees)
-    print(f"Theta参数单步最大变化量: {max_theta_change_degrees}度 ({max_theta_change_radians:.6f}弧度)")
+    # 从配置文件读取theta参数最大变化量
+    max_theta_change_radians = get_max_theta_change_radians()
+    max_theta_change_degrees = np.rad2deg(max_theta_change_radians)
+    print(f"Theta参数单步最大变化量: {max_theta_change_degrees:.1f}度 ({max_theta_change_radians:.6f}弧度)")
     
-    # 使用交替优化方法
-    optimized_params = alternate_optimize_parameters(
-        initial_params, 
-        max_alt_iterations=4,      
-        convergence_tol=1e-4,      
-        max_sub_iterations_group1=10, 
-        max_sub_iterations_group2=10, 
-        lambda_init_group1=2.0,   
-        lambda_init_group2=0.001,   
-        max_theta_delta_rad_for_sub_opt=max_theta_change_radians  
-    )
+    # 使用交替优化方法 - 现在所有参数都从配置文件读取
+    optimized_params = alternate_optimize_parameters(initial_params)
 
-    # 保存优化结果 
+    # 保存优化结果 - 路径从配置文件读取
     save_optimization_results(optimized_params) 
 
     # 评估优化效果 

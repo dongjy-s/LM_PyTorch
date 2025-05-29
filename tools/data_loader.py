@@ -12,10 +12,17 @@ DEFAULT_CONFIG_FILE = 'config/config.yaml'
 # 全局配置变量
 _config = None
 
+# 全局缓存变量
+_joint_limits_cache = None
+
 def load_config(config_file=None):
     """加载配置文件"""
     global _config
     
+    # 如果已经加载过配置，直接返回
+    if _config is not None:
+        return _config
+        
     if config_file is None:
         config_file = DEFAULT_CONFIG_FILE
     
@@ -28,10 +35,10 @@ def load_config(config_file=None):
     try:
         with open(config_file, 'r', encoding='utf-8') as f:
             _config = yaml.safe_load(f)
-        print(f"成功加载配置文件: {config_file}")
+        print(f"✅ 成功加载配置文件: {config_file}")
         return _config
     except Exception as e:
-        print(f"加载配置文件时出错: {e}")
+        print(f"❌ 加载配置文件时出错: {e}")
         print("使用默认配置")
         _config = get_default_config()
         return _config
@@ -51,9 +58,38 @@ def get_default_config():
             'fixed_indices': []
         },
         'optimization': {
-            'max_iterations': 1000,
-            'convergence_threshold': 1e-8,
-            'verbose': True
+            'lm_optimization': {
+                'alternate_optimization': {
+                    'max_alt_iterations': 4,
+                    'convergence_tol': 1e-4,
+                    'max_sub_iterations_group1': 10,
+                    'max_sub_iterations_group2': 10
+                },
+                'damping': {
+                    'lambda_init_group1': 2.0,
+                    'lambda_init_group2': 0.001,
+                    'lambda_init_default': 0.01,
+                    'lambda_max': 1e8,
+                    'lambda_min': 1e-7,
+                    'damping_type': 'marquardt'
+                },
+                'convergence': {
+                    'parameter_tol': 1e-10,
+                    'error_tol': 1e-12,
+                    'max_inner_iterations': 10,
+                    'rho_threshold': 0.0
+                },
+                'constraints': {
+                    'max_theta_change_degrees': 1.0,
+                    'enable_quaternion_normalization': True
+                },
+                'output': {
+                    'save_delta_values': True,
+                    'delta_csv_file': 'results/delta_values.csv',
+                    'save_optimization_results': True,
+                    'results_prefix': 'results/optimized'
+                }
+            }
         }
     }
 
@@ -71,13 +107,17 @@ def get_file_path(key):
 
 def get_error_weights():
     """获取误差权重"""
-    config = get_config()
-    return np.array(config['robot_config']['error_weights'])
+    global ERROR_WEIGHTS
+    if ERROR_WEIGHTS is None:
+        _ensure_config_loaded()
+    return ERROR_WEIGHTS
 
 def get_fixed_indices():
     """获取固定参数索引"""
-    config = get_config()
-    return config['robot_config']['fixed_indices']
+    global ALL_FIXED_INDICES
+    if ALL_FIXED_INDICES is None:
+        _ensure_config_loaded()
+    return ALL_FIXED_INDICES
 
 def extract_joint_angles_from_raw(file_path=None):
     """直接从原始关节角度文件提取数据"""
@@ -120,7 +160,7 @@ def extract_joint_angles_from_raw(file_path=None):
             raise ValueError("未能从文件中提取到任何关节角度数据")
             
         result = np.array(joint_angles)
-        print(f"成功从 {file_path} 提取 {result.shape[0]} 组关节角度数据")
+        print(f"✅ 加载关节角度: {result.shape[0]}组数据")
         return result
         
     except FileNotFoundError:
@@ -171,7 +211,7 @@ def extract_laser_positions_from_raw(file_path=None):
             raise ValueError("未能从文件中提取到任何激光位置数据")
             
         result = np.array(laser_positions)
-        print(f"成功从 {file_path} 提取 {result.shape[0]} 组激光位置数据")
+        print(f"✅ 加载激光数据: {result.shape[0]}组数据")
         return result
         
     except FileNotFoundError:
@@ -214,12 +254,17 @@ def load_dh_params():
     # 将6x4的矩阵展平为24个参数的一维数组
     dh_params_flat = dh_data.flatten()
     
-    print(f"成功从 {file_path} 加载DH参数")
-    print(f"加载的DH参数: {dh_params_flat.tolist()}")
+    print(f"✅ 加载DH参数: {dh_params_flat.shape[0]}个参数")
     return dh_params_flat
         
 def load_joint_limits():
-    """加载关节限位从CSV文件"""
+    """加载关节限位从CSV文件（带缓存）"""
+    global _joint_limits_cache
+    
+    # 如果已经缓存，直接返回
+    if _joint_limits_cache is not None:
+        return _joint_limits_cache
+        
     config = get_config()
     file_path = config['data_files']['joint_limits']
     
@@ -233,10 +278,9 @@ def load_joint_limits():
     joint_limits[:, 0] = limits_data[:, 1]  # LowerLimit (最小值)
     joint_limits[:, 1] = limits_data[:, 0]  # UpperLimit (最大值)
     
-    print(f"成功从 {file_path} 加载关节限位")
-    print(f"加载的关节限位:")
-    for i, (min_val, max_val) in enumerate(joint_limits):
-        print(f"  关节{i+1}: [{min_val:.1f}°, {max_val:.1f}°]")
+    # 缓存结果
+    _joint_limits_cache = joint_limits
+    print(f"✅ 加载关节限位: {joint_limits.shape[0]}个关节")
     
     return joint_limits
 
@@ -245,7 +289,12 @@ def load_joint_angles():
     return extract_joint_angles_from_raw()
 
 def load_calibration_params():
-    """加载初始基座和工具偏移参数"""
+    """加载初始基座和工具偏移参数
+    
+    返回:
+        tool_offset_params: TCP偏移参数 (7个值：x,y,z,qx,qy,qz,qw) - 数值较小
+        laser_base_params: 激光基座参数 (7个值：x,y,z,qx,qy,qz,qw) - 数值较大
+    """
     config = get_config()
     file_path = config['data_files']['calibration_results']
     
@@ -259,18 +308,27 @@ def load_calibration_params():
         for line in lines:
             line = line.strip()
             if line.startswith('base:'):
-                # 提取base参数
+                # ⚠️ base参数 = 激光基座变换 (Laser -> Base) - 数值较大，通常数百到数千
                 param_str = line.split(':', 1)[1].strip()
                 laser_base_params = np.array(ast.literal_eval(param_str))
             elif line.startswith('tool:'):
-                # 提取tool参数  
+                # ⚠️ tool参数 = TCP偏移 (Flange -> Tool) - 数值较小，通常几毫米到几十毫米  
                 param_str = line.split(':', 1)[1].strip()
                 tool_offset_params = np.array(ast.literal_eval(param_str))
         
         if tool_offset_params is None or laser_base_params is None:
             raise ValueError("未能从文件中读取完整的校准参数")
+        
+        # 数值范围检查，帮助发现参数标签错误
+        tool_pos_magnitude = np.linalg.norm(tool_offset_params[:3])
+        base_pos_magnitude = np.linalg.norm(laser_base_params[:3]) 
+        
+        if tool_pos_magnitude > 1000:  # TCP偏移超过1米，可能有问题
+            print(f"⚠️ 警告: TCP偏移参数数值异常大 ({tool_pos_magnitude:.1f}), 请检查是否与base参数标签搞反")
+        if base_pos_magnitude < 100:   # 激光基座距离小于10cm，可能有问题  
+            print(f"⚠️ 警告: 激光基座参数数值异常小 ({base_pos_magnitude:.1f}), 请检查是否与tool参数标签搞反")
             
-        print(f"成功从 {file_path} 读取校准参数")
+        print(f"✅ 加载校准参数: TCP + 激光基座变换")
         return tool_offset_params, laser_base_params
         
     except Exception as e:
@@ -308,6 +366,125 @@ def get_optimizable_indices():
     fixed_indices = get_fixed_indices()
     return [i for i in range(38) if i not in fixed_indices]
 
-# 初始化配置
-load_config()
+#! LM优化配置读取函数
+
+def get_lm_config():
+    """获取LM优化完整配置"""
+    config = get_config()
+    return config.get('optimization', {}).get('lm_optimization', {})
+
+def get_alternate_optimization_config():
+    """获取交替优化配置"""
+    lm_config = get_lm_config()
+    config = lm_config.get('alternate_optimization', {
+        'max_alt_iterations': 4,
+        'convergence_tol': 1e-4,
+        'max_sub_iterations_group1': 10,
+        'max_sub_iterations_group2': 10
+    })
+    
+    # 确保数值参数是正确的类型
+    if 'convergence_tol' in config:
+        config['convergence_tol'] = float(config['convergence_tol'])
+    if 'max_alt_iterations' in config:
+        config['max_alt_iterations'] = int(config['max_alt_iterations'])
+    if 'max_sub_iterations_group1' in config:
+        config['max_sub_iterations_group1'] = int(config['max_sub_iterations_group1'])
+    if 'max_sub_iterations_group2' in config:
+        config['max_sub_iterations_group2'] = int(config['max_sub_iterations_group2'])
+    
+    return config
+
+def get_damping_config():
+    """获取阻尼参数配置"""
+    lm_config = get_lm_config()
+    config = lm_config.get('damping', {
+        'lambda_init_group1': 2.0,
+        'lambda_init_group2': 0.001,
+        'lambda_init_default': 0.01,
+        'lambda_max': 1e8,
+        'lambda_min': 1e-7,
+        'damping_type': 'marquardt'
+    })
+    
+    # 确保数值参数是浮点数类型
+    for key in ['lambda_init_group1', 'lambda_init_group2', 'lambda_init_default', 
+                'lambda_max', 'lambda_min']:
+        if key in config:
+            config[key] = float(config[key])
+    
+    return config
+
+def get_convergence_config():
+    """获取收敛控制配置"""
+    lm_config = get_lm_config()
+    config = lm_config.get('convergence', {
+        'parameter_tol': 1e-10,
+        'error_tol': 1e-12,
+        'max_inner_iterations': 10,
+        'rho_threshold': 0.0
+    })
+    
+    # 确保数值参数是正确类型
+    for key in ['parameter_tol', 'error_tol', 'rho_threshold']:
+        if key in config:
+            config[key] = float(config[key])
+    if 'max_inner_iterations' in config:
+        config['max_inner_iterations'] = int(config['max_inner_iterations'])
+    
+    return config
+
+def get_constraints_config():
+    """获取参数约束配置"""
+    lm_config = get_lm_config()
+    config = lm_config.get('constraints', {
+        'max_theta_change_degrees': 1.0,
+        'enable_quaternion_normalization': True
+    })
+    
+    # 确保数值参数是浮点数类型
+    if 'max_theta_change_degrees' in config:
+        config['max_theta_change_degrees'] = float(config['max_theta_change_degrees'])
+    if 'enable_quaternion_normalization' in config:
+        config['enable_quaternion_normalization'] = bool(config['enable_quaternion_normalization'])
+    
+    return config
+
+def get_output_config():
+    """获取输出设置配置"""
+    lm_config = get_lm_config()
+    return lm_config.get('output', {
+        'save_delta_values': True,
+        'delta_csv_file': 'results/delta_values.csv',
+        'save_optimization_results': True,
+        'results_prefix': 'results/optimized'
+    })
+
+def get_max_theta_change_radians():
+    """获取theta参数最大变化量（弧度）"""
+    constraints_config = get_constraints_config()
+    max_theta_degrees = constraints_config.get('max_theta_change_degrees', 1.0)
+    return np.deg2rad(max_theta_degrees)
+
+# 延迟加载的全局变量，避免导入时重复输出
+def _get_error_weights():
+    """内部函数：获取误差权重"""
+    config = get_config()
+    return np.array(config['robot_config']['error_weights'])
+
+def _get_fixed_indices():
+    """内部函数：获取固定参数索引"""
+    config = get_config()
+    return config['robot_config']['fixed_indices']
+
+# 导出变量（向后兼容），在首次访问时才加载
+ERROR_WEIGHTS = None
+ALL_FIXED_INDICES = None
+
+def _ensure_config_loaded():
+    """确保配置已加载"""
+    global ERROR_WEIGHTS, ALL_FIXED_INDICES
+    if ERROR_WEIGHTS is None:
+        ERROR_WEIGHTS = _get_error_weights()
+        ALL_FIXED_INDICES = _get_fixed_indices()
 

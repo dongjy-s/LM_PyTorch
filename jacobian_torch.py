@@ -4,8 +4,9 @@ import torch
 import torch.autograd.functional as F
 from tools.data_loader import (
     get_laser_tool_matrix, load_joint_angles,  
-    ERROR_WEIGHTS, JOINT_LIMITS,
-    get_initial_params
+    ERROR_WEIGHTS,
+    get_initial_params,
+    load_joint_limits
 )
 
 #! 构建MDH变换矩阵
@@ -81,9 +82,10 @@ def forward_kinematics_T(q_deg_array, params_torch):
     tool_offset_quaternion = params_torch[27:31]
 
     #* 检查关节限位
+    joint_limits = load_joint_limits()
     q_list = q_deg_array.detach().cpu().numpy().tolist()
     for idx, q in enumerate(q_list):
-        min_lim, max_lim = JOINT_LIMITS[idx]
+        min_lim, max_lim = joint_limits[idx]
         if q < min_lim or q > max_lim:
             raise ValueError(f"关节{idx+1}角度 {q}° 超出限位范围 [{min_lim}°, {max_lim}°]")
 

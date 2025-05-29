@@ -8,32 +8,16 @@ import ast
 JOINT_ANGLE_FILE = 'data/extracted_joint_angles.csv'
 LASER_POS_FILE = 'data/extracted_laser_positions.csv'
 CALIBRATION_RESULTS_FILE = 'results/calibration_results.csv'
+DH_PARAMS_FILE = 'data/dh.csv'  # DH参数文件路径
+JOINT_LIMITS_FILE = 'data/joint_limits.csv'  # 关节限位文件路径
 
 # 固定的参数索引(为空则是全优化)
 ALL_FIXED_INDICES = []
 #! 机器人配置常量
 # 误差权重
-ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
+ERROR_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.01, 0.01, 0.01])
 
-# 待优化的DH参数: alpha, a, d, theta_offset 单位:mm,度
-INIT_DH_PARAMS = [
-    0, 0, 285.5, 0,
-    -90, 0, 0, -90,
-    180, 760, 0, -90,
-    -90, 0, 540, 0,
-    90, 0, 150, 0,
-    -90, 0, 127, 0
-]
 
-# 关节限位(度)
-JOINT_LIMITS = np.array([
-    [-175, 175],
-    [-110, 110],
-    [-135, 135],
-    [-175, 175],
-    [-115, 115],
-    [-175, 175]
-])
 
 #! 把原始激光数据转换为4*4的变换矩阵
 def get_laser_tool_matrix():
@@ -54,6 +38,41 @@ def get_laser_tool_matrix():
         
         laser_tool_matrix[i] = T
     return laser_tool_matrix
+
+#! 加载DH参数从CSV文件
+def load_dh_params():
+    dh_data = pd.read_csv(DH_PARAMS_FILE, delimiter=',', skiprows=1, header=None).values
+    
+    if dh_data.shape[0] != 6 or dh_data.shape[1] != 4:
+        raise ValueError(f"DH参数文件格式错误：期望6行4列，实际{dh_data.shape[0]}行{dh_data.shape[1]}列")
+    
+    # 将6x4的矩阵展平为24个参数的一维数组
+    dh_params_flat = dh_data.flatten()
+    
+    print(f"成功从 {DH_PARAMS_FILE} 加载DH参数")
+    print(f"加载的DH参数: {dh_params_flat.tolist()}")
+    return dh_params_flat
+        
+#! 加载关节限位从CSV文件
+def load_joint_limits():
+
+    limits_data = pd.read_csv(JOINT_LIMITS_FILE, delimiter=',', skiprows=1, header=None).values
+    
+    if limits_data.shape[0] != 6 or limits_data.shape[1] != 2:
+        raise ValueError(f"关节限位文件格式错误：期望6行2列，实际{limits_data.shape[0]}行{limits_data.shape[1]}列")
+    
+    # CSV格式是 [UpperLimit, LowerLimit]，需要转换为 [LowerLimit, UpperLimit]
+    joint_limits = np.zeros((6, 2))
+    joint_limits[:, 0] = limits_data[:, 1]  # LowerLimit (最小值)
+    joint_limits[:, 1] = limits_data[:, 0]  # UpperLimit (最大值)
+    
+    print(f"成功从 {JOINT_LIMITS_FILE} 加载关节限位")
+    print(f"加载的关节限位:")
+    for i, (min_val, max_val) in enumerate(joint_limits):
+        print(f"  关节{i+1}: [{min_val:.1f}°, {max_val:.1f}°]")
+    
+    return joint_limits
+        
 
 #! 加载关节角度数据
 def load_joint_angles():
@@ -92,8 +111,9 @@ def load_calibration_params():
 #! 获取初始参数(38个参数)
 def get_initial_params():
     tool_offset_params, laser_base_params = load_calibration_params()
+    dh_params = load_dh_params()  
     initial_params = np.concatenate((
-        INIT_DH_PARAMS,
+        dh_params,  
         tool_offset_params,
         laser_base_params
     ))
@@ -101,9 +121,7 @@ def get_initial_params():
 
 
 def get_parameter_groups(exclude_fixed=True):
-    # 第一组：DH参数 + 工具TCP + 激光跟踪仪XYZ
     all_indices_group1 = list(range(0, 34))
-    # 第二组：激光跟踪仪四元数
     all_indices_group2 = list(range(34, 38))
     
     if exclude_fixed:
@@ -116,3 +134,4 @@ def get_parameter_groups(exclude_fixed=True):
 
 def get_optimizable_indices():
     return [i for i in range(38) if i not in ALL_FIXED_INDICES]
+

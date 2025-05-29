@@ -3,16 +3,10 @@ import numpy as np
 import torch
 import torch.autograd.functional as F
 from tools.data_loader import (
-    get_laser_tool_matrix, load_joint_angles, load_calibration_data, 
-    load_calibration_params, ERROR_WEIGHTS, INIT_DH_PARAMS, JOINT_LIMITS,
+    get_laser_tool_matrix, load_joint_angles,  
+    ERROR_WEIGHTS, JOINT_LIMITS,
     get_initial_params
 )
-
-#! 加载校准参数
-INIT_TOOL_OFFSET_PARAMS, INIT_T_LASER_BASE_PARAMS = load_calibration_params()
-
-print(f"使用的TCP参数: {INIT_TOOL_OFFSET_PARAMS}")
-print(f"使用的基座参数: {INIT_T_LASER_BASE_PARAMS}")
 
 #! 构建MDH变换矩阵
 def modified_dh_matrix(theta_val_rad, alpha_val_rad, d_val, a_val):
@@ -257,7 +251,6 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
         #* 3. 将DH参数计算的位姿转换到激光跟踪仪坐标系 
         T_pred_in_laser_frame = torch.matmul(T_laser_base_matrix, T_pred_robot_base)
 
-
         
         #* 4.1 计算位置误差
         pos_pred_in_laser = T_pred_in_laser_frame[0:3, 3]
@@ -305,12 +298,12 @@ def compute_error_vector_jacobian(params, joint_angles, laser_matrix, weights=ER
 
 #! 测试
 if __name__ == '__main__':
-    # 使用 data_loader 模块获取初始参数
+    
     initial_params_np = get_initial_params()
     initial_params_torch = torch.tensor(initial_params_np, dtype=torch.float64)
-    
-    # 使用 data_loader 模块加载数据
-    all_joint_angles_np, all_T_laser_tool_measured_np = load_calibration_data()
+ 
+    all_joint_angles_np = load_joint_angles()
+    all_T_laser_tool_measured_np = get_laser_tool_matrix()
 
     #* 计算雅可比矩阵
     print("--- 雅可比矩阵计算（第一组） ---")

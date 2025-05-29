@@ -3,8 +3,9 @@ import numpy as np
 import torch
 import csv
 from tools.data_loader import (
-    load_calibration_data, get_initial_params, ERROR_WEIGHTS,
-    ALL_FIXED_INDICES, get_parameter_groups, get_optimizable_indices
+    load_joint_angles, get_initial_params, ERROR_WEIGHTS,
+    ALL_FIXED_INDICES, get_parameter_groups, get_optimizable_indices,
+    get_laser_tool_matrix
 )
 from jacobian_torch import (
     compute_error_vector_jacobian, 
@@ -330,7 +331,8 @@ def optimize_dh_parameters(initial_params, max_iterations=50, lambda_init=0.01, 
     lambda_val = lambda_init
     v_increase = 2  # 用于失败时增大lambda的加速因子
     #* 读取关节角度和激光数据
-    joint_angles, laser_matrices = load_calibration_data()
+    joint_angles = load_joint_angles()
+    laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
     if n_samples == 0:
         print("错误: 无法加载关节角度或激光数据，样本数量为0。")
@@ -544,8 +546,8 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
         csv_file = None
     
     #* 读取关节角度和激光数据
-    joint_angles, laser_matrices = load_calibration_data()
-    n_samples = len(joint_angles)
+    joint_angles = load_joint_angles()
+    laser_matrices = get_laser_tool_matrix()
     
     #! 获取参数分组索引
     opt_indices_group1, opt_indices_group2 = get_parameter_groups(exclude_fixed=True)
@@ -631,7 +633,8 @@ def alternate_optimize_parameters(initial_params, max_alt_iterations=10, converg
 def evaluate_optimization(initial_params, optimized_params):
     """评估优化效果，报告与优化器目标一致的均方根误差"""
     # 读取数据
-    joint_angles, laser_matrices = load_calibration_data()
+    joint_angles = load_joint_angles()
+    laser_matrices = get_laser_tool_matrix()
     n_samples = len(joint_angles)
 
     if n_samples == 0:
@@ -670,7 +673,7 @@ def evaluate_optimization(initial_params, optimized_params):
 
 
 if __name__ == '__main__':
-    # 使用 data_loader 模块获取初始参数
+  
     initial_params = get_initial_params()
 
     # 获取可优化参数索引
@@ -686,13 +689,13 @@ if __name__ == '__main__':
     # 使用交替优化方法
     optimized_params = alternate_optimize_parameters(
         initial_params, 
-        max_alt_iterations=4,      # 最大交替迭代次数
-        convergence_tol=1e-4,      # 收敛阈值
-        max_sub_iterations_group1=10, # 第一组子优化迭代次数
-        max_sub_iterations_group2=10, # 第二组子优化迭代次数 
-        lambda_init_group1=2.0,   # 第一组参数初始阻尼因子
-        lambda_init_group2=0.001,   # 第二组参数初始阻尼因子
-        max_theta_delta_rad_for_sub_opt=max_theta_change_radians  # 传递theta变化限制
+        max_alt_iterations=4,      
+        convergence_tol=1e-4,      
+        max_sub_iterations_group1=10, 
+        max_sub_iterations_group2=10, 
+        lambda_init_group1=2.0,   
+        lambda_init_group2=0.001,   
+        max_theta_delta_rad_for_sub_opt=max_theta_change_radians  
     )
 
     # 保存优化结果 

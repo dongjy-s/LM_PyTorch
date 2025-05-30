@@ -11,7 +11,7 @@ from tools.calibrate import calibrate_AX_equals_YB, calculate_T_flange, tool_pos
 from tools.data_loader import load_joint_angles, extract_laser_positions_from_raw, get_initial_params
 
 # 导入LM优化模块
-from src.lm_optimize_pytorch import alternate_optimize_parameters
+from src.lm_optimize_pytorch import alternate_optimize_parameters, save_optimization_results
 
 def extract_optimized_params(optimized_params):
     """从优化后的参数中提取TCP和基座参数"""
@@ -54,13 +54,17 @@ def main():
         # 提取优化结果
         dh_params, tcp_params, base_params = extract_optimized_params(optimized_params)
         
+        # 保存优化结果到文件
+        print("\n💾 保存优化结果...")
+        save_optimization_results(optimized_params)
+        
         print("\n" + "=" * 60)
         print("🎊 标定与优化完成！")
         print("=" * 60)
         print(f"📍 DH参数: 已优化")
         print(f"📍 TCP参数: {tcp_params[:3]} (位置)")
         print(f"📍 基座参数: {base_params[:3]} (位置)")
-        print("📁 优化结果已保存到 results/ 目录")
+        print("✅ 优化结果已成功保存到 results/ 目录")
         
         return optimized_params
         

@@ -158,7 +158,7 @@ def calibrate_AX_equals_YB(A_list, B_list):
     X_pos = X[:3, 3]
     X_rot = R.from_matrix(X[:3, :3])
     X_quat = X_rot.as_quat()
-    print("X (实际为激光基座参数):") # 实际上X是激光基座的大数值
+    print("X (激光基座参数 - 实际应用中作为Base变换):")  # 修正为实际用途
     print("  矩阵:")
     print(X)
     print(f"  平移 (x, y, z): {X_pos[0]:.6f}, {X_pos[1]:.6f}, {X_pos[2]:.6f}")
@@ -167,7 +167,7 @@ def calibrate_AX_equals_YB(A_list, B_list):
     Y_pos = Y[:3, 3]
     Y_rot = R.from_matrix(Y[:3, :3])
     Y_quat = Y_rot.as_quat()
-    print("\nY (实际为TCP偏移参数):") # 实际上Y是TCP偏移的小数值
+    print("\nY (TCP偏移参数 - 实际应用中作为Tool变换):")  # 修正为实际用途
     print("  矩阵:")
     print(Y)
     print(f"  平移 (x, y, z): {Y_pos[0]:.6f}, {Y_pos[1]:.6f}, {Y_pos[2]:.6f}")
@@ -179,19 +179,18 @@ def calibrate_AX_equals_YB(A_list, B_list):
     os.makedirs(os.path.dirname(results_file), exist_ok=True)
     
     with open(results_file, mode='w', encoding='utf-8') as file:
-        # 直接互换X和Y的含义：
-        # X实际是激光基座参数（大数值） -> 但我们要把它作为base保存
-        # Y实际是TCP偏移参数（小数值） -> 但我们要把它作为tool保存
+        # 正确的保存逻辑：
+        # X是Flange->Tool变换，即TCP偏移参数
+        # Y是Laser->Base变换，即激光基座参数
         
-        # 直接互换：Y作为TCP偏移，X作为激光基座
-        tool_data = Y_pos.tolist() + Y_quat.tolist()  # Y是TCP偏移 (小数值)
-        base_data = X_pos.tolist() + X_quat.tolist()  # X是激光基座 (大数值)
+        tool_data = Y_pos.tolist() + Y_quat.tolist()  # Y作为TCP偏移参数
+        base_data = X_pos.tolist() + X_quat.tolist()  # X作为激光基座参数
         
-        print(f"修正后：Y作为TCP偏移参数，X作为激光基座参数")
+        print(f"\n保存结果：Y作为TCP偏移参数，X作为激光基座参数")
         
         # 写入文件：tool行是TCP偏移，base行是激光基座变换
-        file.write(f"tool: {tool_data}\n")  # TCP偏移 (Y的小数值)
-        file.write(f"base: {base_data}\n")  # 激光基座 (X的大数值)
+        file.write(f"tool: {tool_data}\n")  # TCP偏移参数 (Y)
+        file.write(f"base: {base_data}\n")  # 激光基座参数 (X)
     
     print(f"\n标定结果已保存到: {results_file}")
 

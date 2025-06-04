@@ -180,8 +180,6 @@ def extract_laser_positions_from_raw(file_path=None):
     
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            # 跳过表头
-            next(f)
             
             for line_num, line in enumerate(f, start=2):
                 stripped_line = line.strip()

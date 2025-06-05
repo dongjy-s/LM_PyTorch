@@ -1,8 +1,8 @@
 # 数据文件路径配置
 data_files:
   # 原始数据文件
-  joint_angle_raw: 'data/test_joint_angles.xlsx'       # 原始关节角度文件
-  laser_pos_raw: 'data/test_positions.txt'           # 原始激光位置文件
+  joint_angle_raw: 'data/test_joint_angles.csv'       # 原始关节角度文件
+  laser_pos_raw: 'data/test_positions.csv'           # 原始激光位置文件
   
   # 参数文件  
   dh_params: 'data/dh.csv'                      # DH参数文件

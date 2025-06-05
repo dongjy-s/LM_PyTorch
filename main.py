@@ -11,7 +11,10 @@ from tools.calibrate import calibrate_AX_equals_YB, calculate_T_flange, tool_pos
 from tools.data_loader import load_joint_angles, extract_laser_positions_from_raw, get_initial_params
 
 # 导入LM优化模块
-from src.lm_optimize_pytorch import alternate_optimize_parameters, save_optimization_results, evaluate_optimization
+from src.lm_optimize_pytorch import alternate_optimize_parameters, save_optimization_results
+
+# 导入结果分析模块
+from tools.result_analyzer import evaluate_optimization
 
 def extract_optimized_params(optimized_params):
     """从优化后的参数中提取TCP和基座参数"""

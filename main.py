@@ -11,7 +11,7 @@ from tools.calibrate import calibrate_AX_equals_YB, calculate_T_flange, tool_pos
 from tools.data_loader import load_joint_angles, extract_laser_positions_from_raw, get_initial_params
 
 # 导入LM优化模块
-from src.lm_optimize_pytorch import alternate_optimize_parameters, save_optimization_results
+from src.lm_optimize_pytorch import alternate_optimize_parameters, save_optimization_results, evaluate_optimization
 
 def extract_optimized_params(optimized_params):
     """从优化后的参数中提取TCP和基座参数"""
@@ -56,7 +56,59 @@ def main():
         
         # 保存优化结果到文件
         print("\n💾 保存优化结果...")
-        save_optimization_results(optimized_params)
+        save_optimization_results(optimized_params, initial_params)
+        
+        # 评估优化效果并显示详细对比
+        print("\n📊 优化效果评估...")
+        evaluate_optimization(initial_params, optimized_params)
+        
+        # 显示详细参数对比
+        print("\n" + "="*70)
+        print(" "*25 + "DH参数对比")
+        print("="*70)
+        print(f"{'关节':^6}|{'参数':^12}|{'初始值':^15}|{'优化值':^15}|{'差异':^15}|{'状态':^10}")
+        print("-"*70)
+        
+        param_names = ["alpha", "a", "d", "theta_offset"]
+        
+        # 将参数重构为6×4矩阵，方便查看 (DH部分)
+        init_dh_matrix = initial_params[0:24].reshape(6, 4)
+        opt_dh_matrix = optimized_params[0:24].reshape(6, 4)
+        
+        for i in range(6):  
+            for j in range(4):  
+                param_idx = i * 4 + j  
+                param_diff = opt_dh_matrix[i, j] - init_dh_matrix[i, j]
+                status = "已优化"
+                print(f"{i+1:^6}|{param_names[j]:^12}|{init_dh_matrix[i, j]:^15.4f}|{opt_dh_matrix[i, j]:^15.4f}|{param_diff:^15.4f}|{status:^10}")
+            if i < 5:  
+                print("-"*70)
+        
+        # 添加TCP参数对比
+        print("="*70)
+        print(" "*25 + "TCP 参数对比")
+        print("="*70)
+        tcp_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+        init_tcp_params = initial_params[24:31]
+        opt_tcp_params = optimized_params[24:31]
+        for k in range(7):
+            tcp_diff = opt_tcp_params[k] - init_tcp_params[k]
+            status = "已优化"
+            print(f"{'-':^6}|{tcp_param_names[k]:^12}|{init_tcp_params[k]:^15.4f}|{opt_tcp_params[k]:^15.4f}|{tcp_diff:^15.4f}|{status:^10}")
+
+        # 添加激光跟踪仪-基座变换参数对比
+        print("="*70)
+        print(" "*25 + "激光跟踪仪-基座变换参数对比")
+        print("="*70)
+        t_laser_base_param_names = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+        init_t_laser_base_params = initial_params[31:38]
+        opt_t_laser_base_params = optimized_params[31:38]
+        for k in range(7):
+            t_laser_base_diff = opt_t_laser_base_params[k] - init_t_laser_base_params[k]
+            status = "已优化"
+            print(f"{'-':^6}|{t_laser_base_param_names[k]:^12}|{init_t_laser_base_params[k]:^15.4f}|{opt_t_laser_base_params[k]:^15.4f}|{t_laser_base_diff:^15.4f}|{status:^10}")
+
+        print("="*70)
         
         print("\n" + "=" * 60)
         print("🎊 标定与优化完成！")

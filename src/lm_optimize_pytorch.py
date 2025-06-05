@@ -198,13 +198,148 @@ def compute_total_error_avg(params, joint_angles, laser_matrices, weights=None):
     mean_squared_error = total_error_sum_sq / n_samples
     return torch.sqrt(mean_squared_error)
 
+#! 生成优化前后详细对比分析
+def generate_detailed_comparison(initial_params, optimized_params):
+    """
+    生成优化前后的详细对比分析数据
+    
+    参数:
+    initial_params: 初始参数
+    optimized_params: 优化后的参数
+    
+    返回:
+    pandas.DataFrame: 包含详细对比数据的DataFrame
+    """
+    from tools.data_loader import load_joint_angles, get_laser_tool_matrix
+    import pandas as pd
+    
+    # 加载测试数据
+    joint_angles = load_joint_angles()
+    laser_matrices = get_laser_tool_matrix()
+    n_samples = len(joint_angles)
+    
+    print(f"   📊 分析 {n_samples} 组测试数据的优化效果...")
+    
+    # 计算权重
+    weights = get_error_weights()
+    
+    comparison_data = []
+    
+    for i in range(n_samples):
+        joint_angle = joint_angles[i]
+        laser_matrix = laser_matrices[i]
+        
+        # 计算优化前的误差
+        error_before = compute_error_vector(initial_params, joint_angle, laser_matrix, weights)
+        pos_error_before = error_before[:3].detach().numpy()
+        orient_error_before = error_before[3:].detach().numpy()
+        total_error_before = torch.norm(error_before).item()
+        
+        # 计算优化前的分解误差（位置误差和姿态误差）
+        pos_error_magnitude_before = np.sqrt(np.sum(pos_error_before**2))
+        orient_error_magnitude_before = np.sqrt(np.sum(orient_error_before**2))
+        
+        # 计算优化后的误差
+        error_after = compute_error_vector(optimized_params, joint_angle, laser_matrix, weights)
+        pos_error_after = error_after[:3].detach().numpy()
+        orient_error_after = error_after[3:].detach().numpy()
+        total_error_after = torch.norm(error_after).item()
+        
+        # 计算优化后的分解误差（位置误差和姿态误差）
+        pos_error_magnitude_after = np.sqrt(np.sum(pos_error_after**2))
+        orient_error_magnitude_after = np.sqrt(np.sum(orient_error_after**2))
+        
+        # 计算改进率
+        improvement_rate = ((total_error_before - total_error_after) / total_error_before) * 100 if total_error_before > 0 else 0
+        pos_improvement_rate = ((pos_error_magnitude_before - pos_error_magnitude_after) / pos_error_magnitude_before) * 100 if pos_error_magnitude_before > 0 else 0
+        orient_improvement_rate = ((orient_error_magnitude_before - orient_error_magnitude_after) / orient_error_magnitude_before) * 100 if orient_error_magnitude_before > 0 else 0
+        
+        # 添加到对比数据 - 按照优化前后成对的顺序排列
+        comparison_data.append({
+            '数据组': f'第{i+1}组',
+            '优化前X误差(mm)': f'{pos_error_before[0]:.6f}',
+            '优化后X误差(mm)': f'{pos_error_after[0]:.6f}',
+            '优化前Y误差(mm)': f'{pos_error_before[1]:.6f}',
+            '优化后Y误差(mm)': f'{pos_error_after[1]:.6f}',
+            '优化前Z误差(mm)': f'{pos_error_before[2]:.6f}',
+            '优化后Z误差(mm)': f'{pos_error_after[2]:.6f}',
+            '优化前Rx误差(度)': f'{orient_error_before[0]:.6f}',
+            '优化后Rx误差(度)': f'{orient_error_after[0]:.6f}',
+            '优化前Ry误差(度)': f'{orient_error_before[1]:.6f}',
+            '优化后Ry误差(度)': f'{orient_error_after[1]:.6f}',
+            '优化前Rz误差(度)': f'{orient_error_before[2]:.6f}',
+            '优化后Rz误差(度)': f'{orient_error_after[2]:.6f}',
+            '优化前位置误差(mm)': f'{pos_error_magnitude_before:.6f}',
+            '优化后位置误差(mm)': f'{pos_error_magnitude_after:.6f}',
+            '优化前姿态误差(度)': f'{orient_error_magnitude_before:.6f}',
+            '优化后姿态误差(度)': f'{orient_error_magnitude_after:.6f}',
+            '优化前总误差(L2范数)': f'{total_error_before:.6f}',
+            '优化后总误差(L2范数)': f'{total_error_after:.6f}',
+            '位置改进率(%)': f'{pos_improvement_rate:.2f}%',
+            '姿态改进率(%)': f'{orient_improvement_rate:.2f}%',
+            '总误差改进率(%)': f'{improvement_rate:.2f}%'
+        })
+    
+    # 计算统计信息
+    total_errors_before = [float(row['优化前总误差(L2范数)']) for row in comparison_data]
+    total_errors_after = [float(row['优化后总误差(L2范数)']) for row in comparison_data]
+    pos_errors_before = [float(row['优化前位置误差(mm)']) for row in comparison_data]
+    pos_errors_after = [float(row['优化后位置误差(mm)']) for row in comparison_data]
+    orient_errors_before = [float(row['优化前姿态误差(度)']) for row in comparison_data]
+    orient_errors_after = [float(row['优化后姿态误差(度)']) for row in comparison_data]
+    
+    avg_error_before = np.mean(total_errors_before)
+    avg_error_after = np.mean(total_errors_after)
+    avg_pos_error_before = np.mean(pos_errors_before)
+    avg_pos_error_after = np.mean(pos_errors_after)
+    avg_orient_error_before = np.mean(orient_errors_before)
+    avg_orient_error_after = np.mean(orient_errors_after)
+    
+    overall_improvement = ((avg_error_before - avg_error_after) / avg_error_before) * 100 if avg_error_before > 0 else 0
+    pos_overall_improvement = ((avg_pos_error_before - avg_pos_error_after) / avg_pos_error_before) * 100 if avg_pos_error_before > 0 else 0
+    orient_overall_improvement = ((avg_orient_error_before - avg_orient_error_after) / avg_orient_error_before) * 100 if avg_orient_error_before > 0 else 0
+    
+    # 添加统计行 - 匹配新的列顺序
+    comparison_data.append({
+        '数据组': '平均值',
+        '优化前X误差(mm)': '',
+        '优化后X误差(mm)': '',
+        '优化前Y误差(mm)': '',
+        '优化后Y误差(mm)': '',
+        '优化前Z误差(mm)': '',
+        '优化后Z误差(mm)': '',
+        '优化前Rx误差(度)': '',
+        '优化后Rx误差(度)': '',
+        '优化前Ry误差(度)': '',
+        '优化后Ry误差(度)': '',
+        '优化前Rz误差(度)': '',
+        '优化后Rz误差(度)': '',
+        '优化前位置误差(mm)': f'{avg_pos_error_before:.6f}',
+        '优化后位置误差(mm)': f'{avg_pos_error_after:.6f}',
+        '优化前姿态误差(度)': f'{avg_orient_error_before:.6f}',
+        '优化后姿态误差(度)': f'{avg_orient_error_after:.6f}',
+        '优化前总误差(L2范数)': f'{avg_error_before:.6f}',
+        '优化后总误差(L2范数)': f'{avg_error_after:.6f}',
+        '位置改进率(%)': f'{pos_overall_improvement:.2f}%',
+        '姿态改进率(%)': f'{orient_overall_improvement:.2f}%',
+        '总误差改进率(%)': f'{overall_improvement:.2f}%'
+    })
+    
+    print(f"   ✅ 总体平均误差: {avg_error_before:.6f} → {avg_error_after:.6f}")
+    print(f"   📍 位置误差: {avg_pos_error_before:.6f} → {avg_pos_error_after:.6f} (改进率: {pos_overall_improvement:.2f}%)")
+    print(f"   🔄 姿态误差: {avg_orient_error_before:.6f} → {avg_orient_error_after:.6f} (改进率: {orient_overall_improvement:.2f}%)")
+    print(f"   📈 总体改进率: {overall_improvement:.2f}%")
+    
+    return pd.DataFrame(comparison_data)
+
 #! 保存优化后的DH参数和TCP参数
-def save_optimization_results(params, filepath_prefix=None):
+def save_optimization_results(params, initial_params=None, filepath_prefix=None):
     """
     保存优化结果，路径可以从配置文件读取
     
     参数:
     params: 优化后的参数
+    initial_params: 初始参数（用于对比分析）
     filepath_prefix: 文件路径前缀（None时从配置读取）
     """
     # 从配置文件读取默认路径
@@ -247,6 +382,244 @@ def save_optimization_results(params, filepath_prefix=None):
         for name, value in zip(t_laser_base_param_names, t_laser_base_params):
             f.write(f"{name},{value:.6f}\n")
     print(f"优化后的激光跟踪仪-基座变换参数已保存到: {t_laser_base_filepath}")
+    
+    # 生成详细对比分析数据
+    detailed_comparison_df = None
+    if initial_params is not None:
+        print("\n🔍 生成优化前后详细对比分析...")
+        detailed_comparison_df = generate_detailed_comparison(initial_params, params)
+    
+    # 自动生成Excel汇总文件
+    try:
+        import pandas as pd
+        from pathlib import Path
+        
+        # 创建Excel汇总文件
+        results_dir = Path(dirpath)
+        excel_filepath = results_dir / "优化结果汇总.xlsx"
+        
+        # 读取三个CSV文件的数据
+        dh_df = pd.read_csv(dh_filepath)
+        tcp_df = pd.read_csv(tcp_filepath)
+        base_df = pd.read_csv(t_laser_base_filepath)
+        
+        # 创建一个综合的数据框，将三个结果合并到一个工作表
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            # 创建工作簿
+            workbook = writer.book
+            worksheet = workbook.create_sheet(title="优化结果汇总")
+            
+            # 设置标题样式
+            from openpyxl.styles import Font, Alignment, PatternFill
+            title_font = Font(bold=True, size=14)
+            header_font = Font(bold=True, size=12)
+            center_alignment = Alignment(horizontal='center', vertical='center')
+            header_fill = PatternFill(start_color='E6F3FF', end_color='E6F3FF', fill_type='solid')
+            
+            # 写入DH参数部分
+            row = 1
+            worksheet.cell(row=row, column=1, value="🔧 机器人DH参数标定结果").font = title_font
+            worksheet.cell(row=row, column=1).alignment = center_alignment
+            worksheet.merge_cells(f'A{row}:E{row}')
+            row += 2
+            
+            # DH参数表头
+            dh_headers = ['关节编号', 'α (度)', 'a (mm)', 'd (mm)', 'θ偏移 (度)']
+            for col, header in enumerate(dh_headers, 1):
+                cell = worksheet.cell(row=row, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_alignment
+            row += 1
+            
+            # DH参数数据
+            for i, (_, dh_row) in enumerate(dh_df.iterrows()):
+                worksheet.cell(row=row, column=1, value=dh_row.iloc[0])  # 关节名称
+                for col in range(1, 5):
+                    worksheet.cell(row=row, column=col+1, value=f"{dh_row.iloc[col]:.6f}")
+                row += 1
+            
+            # 空行分隔
+            row += 2
+            
+            # 写入TCP位姿部分
+            worksheet.cell(row=row, column=1, value="🎯 工具中心点(TCP)位姿").font = title_font
+            worksheet.cell(row=row, column=1).alignment = center_alignment
+            worksheet.merge_cells(f'A{row}:B{row}')
+            row += 2
+            
+            # TCP位姿表头和数据
+            tcp_headers = ['位姿参数', '优化值']
+            for col, header in enumerate(tcp_headers, 1):
+                cell = worksheet.cell(row=row, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_alignment
+            row += 1
+            
+            # TCP参数名称美化映射
+            tcp_param_names = {
+                'tx': 'X轴位移 (mm)',
+                'ty': 'Y轴位移 (mm)', 
+                'tz': 'Z轴位移 (mm)',
+                'qx': '四元数 qx',
+                'qy': '四元数 qy',
+                'qz': '四元数 qz',
+                'qw': '四元数 qw'
+            }
+            
+            for _, tcp_row in tcp_df.iterrows():
+                param_name = tcp_param_names.get(tcp_row['parameter'], tcp_row['parameter'])
+                worksheet.cell(row=row, column=1, value=param_name)
+                worksheet.cell(row=row, column=2, value=f"{tcp_row['value']:.6f}")
+                row += 1
+            
+            # 写入基座位姿部分（与TCP位姿并排显示）
+            row_start_base = row - len(tcp_df) - 1  # 回到TCP标题行
+            worksheet.cell(row=row_start_base, column=4, value="📍 激光跟踪仪基座位姿").font = title_font
+            worksheet.cell(row=row_start_base, column=4).alignment = center_alignment
+            worksheet.merge_cells(f'D{row_start_base}:E{row_start_base}')
+            row_base = row_start_base + 2
+            
+            # 基座位姿表头
+            base_headers = ['位姿参数', '优化值']
+            for col, header in enumerate(base_headers, 4):
+                cell = worksheet.cell(row=row_base, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_alignment
+            row_base += 1
+            
+            # 基座参数名称美化映射
+            base_param_names = {
+                'tx': 'X轴位移 (mm)',
+                'ty': 'Y轴位移 (mm)',
+                'tz': 'Z轴位移 (mm)', 
+                'qx': '四元数 qx',
+                'qy': '四元数 qy',
+                'qz': '四元数 qz',
+                'qw': '四元数 qw'
+            }
+            
+            # 基座位姿数据
+            for _, base_row in base_df.iterrows():
+                param_name = base_param_names.get(base_row['parameter'], base_row['parameter'])
+                worksheet.cell(row=row_base, column=4, value=param_name)
+                worksheet.cell(row=row_base, column=5, value=f"{base_row['value']:.6f}")
+                row_base += 1
+            
+            # 调整列宽
+            worksheet.column_dimensions['A'].width = 18
+            worksheet.column_dimensions['B'].width = 15
+            worksheet.column_dimensions['C'].width = 15
+            worksheet.column_dimensions['D'].width = 20
+            worksheet.column_dimensions['E'].width = 15
+            
+            # 在主工作表底部添加说明
+            last_row = worksheet.max_row + 2
+            worksheet.cell(row=last_row, column=1, value="📋 说明").font = title_font
+            worksheet.cell(row=last_row, column=1).alignment = center_alignment
+            
+            explanation_lines = [
+                "• DH参数：机器人正向运动学标定参数",
+                "• TCP位姿：工具中心点相对法兰坐标系的变换",
+                "• 基座位姿：激光跟踪仪与机器人基座间的变换关系",
+                "• 详细误差分析请查看'优化前后详细对比'工作表"
+            ]
+            
+            for i, line in enumerate(explanation_lines):
+                worksheet.cell(row=last_row + 1 + i, column=1, value=line).font = Font(size=10)
+                worksheet.merge_cells(f'A{last_row + 1 + i}:E{last_row + 1 + i}')
+            
+            # 添加边框样式
+            from openpyxl.styles import Border, Side
+            thin_border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'), 
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # 为所有有数据的单元格添加边框
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    if cell.value is not None:
+                        cell.border = thin_border
+            
+            # 添加详细对比分析工作表
+            if detailed_comparison_df is not None:
+                # 创建对比分析工作表
+                comparison_sheet = workbook.create_sheet(title="优化前后详细对比")
+                
+                                # 写入标题
+                comparison_sheet.cell(row=1, column=1, value="📊 优化前后逐组数据对比分析").font = title_font
+                comparison_sheet.cell(row=1, column=1).alignment = center_alignment
+                comparison_sheet.merge_cells('A1:V1')  # 扩展合并范围以适应新列
+                
+                # 添加计算说明
+                explanation_text = ("💡 误差计算方式:\n"
+                                  "   位置误差 = √(X²+Y²+Z²) (mm)\n"
+                                  "   姿态误差 = √(Rx²+Ry²+Rz²) (度)\n" 
+                                  "   总误差(L2范数) = √(X²+Y²+Z²+(Rx×0.01)²+(Ry×0.01)²+(Rz×0.01)²)\n"
+                                  "   权重设置: 位置权重=1.0, 姿态权重=0.01")
+                comparison_sheet.cell(row=2, column=1, value=explanation_text).font = Font(size=10, italic=True)
+                comparison_sheet.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+                comparison_sheet.merge_cells('A2:V2')  # 扩展合并范围以适应新列
+                comparison_sheet.row_dimensions[2].height = 40
+                
+                # 写入表头
+                headers = detailed_comparison_df.columns.tolist()
+                for col, header in enumerate(headers, 1):
+                    cell = comparison_sheet.cell(row=4, column=col, value=header)
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = center_alignment
+                
+                # 写入数据
+                for row_idx, (_, row_data) in enumerate(detailed_comparison_df.iterrows(), 5):
+                    for col_idx, value in enumerate(row_data, 1):
+                        cell = comparison_sheet.cell(row=row_idx, column=col_idx, value=value)
+                        # 为平均值行添加特殊样式
+                        if '平均值' in str(value):
+                            cell.font = header_font
+                            cell.fill = PatternFill(start_color='FFE6CC', end_color='FFE6CC', fill_type='solid')
+                
+                # 调整列宽
+                for col in range(1, len(headers) + 1):
+                    if col == 1:  # 数据组列
+                        comparison_sheet.column_dimensions[chr(64 + col)].width = 12
+                    elif '改进率' in headers[col-1]:  # 改进率列
+                        comparison_sheet.column_dimensions[chr(64 + col)].width = 14
+                    elif '位置误差' in headers[col-1] or '姿态误差' in headers[col-1]:  # 位置/姿态误差列
+                        comparison_sheet.column_dimensions[chr(64 + col)].width = 18
+                    else:  # 其他误差列
+                        comparison_sheet.column_dimensions[chr(64 + col)].width = 16
+                
+                # 为所有有数据的单元格添加边框
+                for row in comparison_sheet.iter_rows():
+                    for cell in row:
+                        if cell.value is not None:
+                            cell.border = thin_border
+            
+            # 删除默认的Sheet
+            if 'Sheet' in workbook.sheetnames:
+                workbook.remove(workbook['Sheet'])
+        
+        print(f"✅ 优化结果汇总Excel文件已生成: {excel_filepath}")
+        print("📊 Excel文件包含完整的优化分析:")
+        print("   🔧 机器人DH参数标定结果 - 6个关节的完整DH参数")
+        print("   🎯 工具中心点(TCP)位姿 - 位移+四元数表示") 
+        print("   📍 激光跟踪仪基座位姿 - 基座坐标系变换参数")
+        if detailed_comparison_df is not None:
+            print("   📊 优化前后详细对比 - 逐组数据误差分析和改进率")
+        print("   ✨ 专业格式化：图标标识、单位标注、边框美化")
+        print("   📋 多工作表展示，全面分析优化效果")
+        
+    except ImportError:
+        print("⚠️  未安装pandas库，无法生成Excel汇总文件")
+        print("   请运行: pip install pandas openpyxl")
+    except Exception as e:
+        print(f"⚠️  生成Excel汇总文件时出错: {e}")
 
 #! 使用增广系统SVD求解LM问题
 def solve_lm_augmented_svd(J_opt, error_vector, lambda_val, damping_type=None, svd_threshold=None, verbose=None):
@@ -813,7 +1186,7 @@ if __name__ == '__main__':
     optimized_params = alternate_optimize_parameters(initial_params)
 
     # 保存优化结果 - 路径从配置文件读取
-    save_optimization_results(optimized_params) 
+    save_optimization_results(optimized_params, initial_params) 
 
     # 评估优化效果 
     evaluate_optimization(initial_params, optimized_params)

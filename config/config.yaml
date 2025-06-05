@@ -1,8 +1,8 @@
 # 数据文件路径配置
 data_files:
   # 原始数据文件
-  joint_angle_raw: 'data/joint_angle.csv'       # 原始关节角度文件
-  laser_pos_raw: 'data/laser_pos.csv'           # 原始激光位置文件
+  joint_angle_raw: 'data/test_joint_angles.xlsx'       # 原始关节角度文件
+  laser_pos_raw: 'data/test_positions.txt'           # 原始激光位置文件
   
   # 参数文件  
   dh_params: 'data/dh.csv'                      # DH参数文件
@@ -10,6 +10,39 @@ data_files:
   
   # 手眼标定初始值
   calibration_results: 'data/hand_eye_calibration.csv'  # 校准结果文件
+
+# 智能数据输入配置
+data_input:
+  # 支持的文件格式
+  supported_formats: ["txt", "csv", "xlsx", "xls"]
+  
+  # 关节角度数据配置
+  joint_angles:
+    # 字段识别模式（按优先级排序）
+    field_patterns:
+      - ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+      - ["J1", "J2", "J3", "J4", "J5", "J6"] 
+      - ["axis1", "axis2", "axis3", "axis4", "axis5", "axis6"]
+    unit: "degree"
+    
+    # Rokae格式兼容配置（CSV和TXT通用）
+    rokae_format:
+      pattern: 'j:\s*{\s*([^}]*?)\s*}'
+      extract_count: 6
+      
+  # 位置数据配置
+  positions:
+    # 位置字段模式
+    position_patterns: ["X", "Y", "Z", "pos_x", "pos_y", "pos_z"]
+    # 姿态字段模式  
+    orientation_patterns: ["Rx", "Ry", "Rz", "roll", "pitch", "yaw"]
+    position_unit: "mm"
+    orientation_unit: "degree"
+    
+    # 激光跟踪仪兼容配置
+    laser_tracker:
+      measurement_columns: [7, 8, 9, 10, 11, 12]  # 测量列索引
+      nominal_columns: [1, 2, 3, 4, 5, 6]         # 标称列索引
 
 # 机器人配置参数
 robot_config:

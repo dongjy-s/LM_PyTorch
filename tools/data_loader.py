@@ -6,6 +6,19 @@ import yaml
 from scipy.spatial.transform import Rotation
 import ast
 
+# 添加Excel支持和编码检测
+try:
+    import openpyxl  # Excel支持
+except ImportError:
+    openpyxl = None
+    print("警告: 未安装openpyxl，Excel格式支持不可用")
+
+try:
+    import chardet  # 编码检测
+except ImportError:
+    chardet = None
+    print("警告: 未安装chardet，编码检测不可用")
+
 # 默认配置文件路径
 DEFAULT_CONFIG_FILE = 'config/config.yaml'
 
@@ -14,6 +27,350 @@ _config = None
 
 # 全局缓存变量
 _joint_limits_cache = None
+
+class SmartFormatDetector:
+    """智能格式检测器"""
+    
+    def __init__(self):
+        self.rokae_pattern = re.compile(r'LOCAL VAR jointtarget.*?j:\s*{\s*([^}]*?)\s*}')
+        
+    def detect_format(self, file_path):
+        """检测文件格式"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext == '.txt':
+            return 'txt'
+        elif ext in ['.xlsx', '.xls']:
+            return 'excel'
+        elif ext == '.csv':
+            if self._is_rokae_format(file_path):
+                return 'rokae_csv'
+            else:
+                return 'csv'
+        else:
+            return 'csv'  # 默认尝试CSV格式
+    
+    def _is_rokae_format(self, file_path):
+        """检测关节角度是否为rokae机器人格式"""
+        try:
+            encoding = self.detect_encoding(file_path)
+            with open(file_path, 'r', encoding=encoding) as f:
+                first_lines = f.read(500)
+                return 'LOCAL VAR jointtarget' in first_lines
+        except:
+            return False
+    
+    def detect_encoding(self, file_path):
+        """检测文件编码"""
+        if chardet is None:
+            return 'utf-8'
+        try:
+            with open(file_path, 'rb') as f:
+                raw_data = f.read(10000)
+                result = chardet.detect(raw_data)
+                return result.get('encoding', 'utf-8')
+        except:
+            return 'utf-8'
+    
+    def detect_delimiter(self, file_path):
+        """检测分隔符"""
+        encoding = self.detect_encoding(file_path)
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                sample = f.read(1024)
+            
+            delimiters = [',', '\t', ' ', ';', '|']
+            delimiter_counts = {}
+            
+            for delimiter in delimiters:
+                count = sample.count(delimiter)
+                if count > 0:
+                    delimiter_counts[delimiter] = count
+            
+            if not delimiter_counts:
+                return ','
+            
+            return max(delimiter_counts, key=delimiter_counts.get)
+        except:
+            return ','
+
+class SmartDataParser:
+    """智能数据解析器"""
+    
+    def __init__(self):
+        self.detector = SmartFormatDetector()
+        self.config = get_config()
+    
+    def parse_joint_angles(self, file_path):
+        """解析关节角度数据"""
+        file_format = self.detector.detect_format(file_path)
+        
+        try:
+            if file_format == 'rokae_csv':
+                return self._parse_rokae_joint_angles(file_path)
+            elif file_format == 'csv':
+                return self._parse_csv_joint_angles(file_path)
+            elif file_format == 'txt':
+                return self._parse_txt_joint_angles(file_path)  
+            elif file_format == 'excel':
+                return self._parse_excel_joint_angles(file_path)
+            else:
+                # 回退到原始格式解析
+                return self._parse_rokae_joint_angles(file_path)
+        except Exception as e:
+            print(f"智能解析失败，尝试原始格式: {e}")
+            return self._parse_rokae_joint_angles(file_path)
+    
+    def parse_positions(self, file_path):
+        """解析位置数据"""
+        file_format = self.detector.detect_format(file_path)
+        
+        try:
+            if file_format == 'csv':
+                return self._parse_csv_positions(file_path)
+            elif file_format == 'txt':
+                return self._parse_txt_positions(file_path)
+            elif file_format == 'excel':
+                return self._parse_excel_positions(file_path)
+            else:
+                # 回退到原始激光跟踪仪格式
+                return self._parse_laser_tracker_positions(file_path)
+        except Exception as e:
+            print(f"智能解析失败，尝试原始激光跟踪仪格式: {e}")
+            return self._parse_laser_tracker_positions(file_path)
+    
+    def _parse_rokae_joint_angles(self, file_path):
+        """解析rokae格式关节角度（保持原有逻辑）"""
+        config = self.config.get('data_input', {}).get('joint_angles', {}).get('rokae_format', {})
+        pattern_str = config.get('pattern', r'j:\s*{\s*([^}]*?)\s*}')
+        pattern = re.compile(pattern_str)
+        
+        joint_angles = []
+        encoding = self.detector.detect_encoding(file_path)
+        
+        with open(file_path, 'r', encoding=encoding) as f:
+            for line_num, line in enumerate(f, 1):
+                match = pattern.search(line)
+                if match:
+                    content_in_braces = match.group(1)
+                    angles_str = [angle.strip() for angle in content_in_braces.split(',')]
+                    
+                    if len(angles_str) >= 6:
+                        try:
+                            extracted_angles = [float(angle) for angle in angles_str[:6] if angle]
+                            if len(extracted_angles) == 6:
+                                joint_angles.append(extracted_angles)
+                        except ValueError as e:
+                            print(f"警告: 第{line_num}行数值转换错误: {e}")
+        
+        if not joint_angles:
+            raise ValueError("未能提取关节角度数据")
+        
+        result = np.array(joint_angles)
+        print(f"✅ rokae格式加载关节角度: {result.shape[0]}组数据")
+        return result
+    
+    def _parse_csv_joint_angles(self, file_path):
+        """解析CSV格式关节角度"""
+        encoding = self.detector.detect_encoding(file_path)
+        df = pd.read_csv(file_path, encoding=encoding)
+        
+        # 智能字段识别
+        joint_data = self._extract_joint_angles_from_df(df)
+        print(f"✅ CSV格式加载关节角度: {joint_data.shape[0]}组数据")
+        return joint_data
+    
+    def _parse_txt_joint_angles(self, file_path):
+        """解析TXT格式关节角度"""
+        encoding = self.detector.detect_encoding(file_path)
+        delimiter = self.detector.detect_delimiter(file_path)
+        
+        # 先检查第一行是否包含列名（如J1,J2等）
+        with open(file_path, 'r', encoding=encoding) as f:
+            first_line = f.readline().strip()
+        
+        # 如果第一行包含字母（可能是列名），使用header=0，否则使用header=None
+        if any(c.isalpha() for c in first_line):
+            df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, header=0)
+        else:
+            df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, 
+                            header=None, comment='#')
+        
+        joint_data = self._extract_joint_angles_from_df(df)
+        print(f"✅ TXT格式加载关节角度: {joint_data.shape[0]}组数据")
+        return joint_data
+    
+    def _parse_excel_joint_angles(self, file_path):
+        """解析Excel格式关节角度"""
+        if openpyxl is None:
+            raise ImportError("需要安装openpyxl来支持Excel格式")
+        
+        df = pd.read_excel(file_path, sheet_name=0)
+        joint_data = self._extract_joint_angles_from_df(df)
+        print(f"✅ Excel格式加载关节角度: {joint_data.shape[0]}组数据")
+        return joint_data
+    
+    def _extract_joint_angles_from_df(self, df):
+        """从DataFrame智能提取关节角度数据"""
+        config = self.config.get('data_input', {}).get('joint_angles', {})
+        field_patterns = config.get('field_patterns', [
+            ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+            ["J1", "J2", "J3", "J4", "J5", "J6"],
+        ])
+        
+        # 尝试通过列名匹配
+        joint_columns = []
+        for pattern in field_patterns:
+            matching_cols = []
+            for col_name in pattern:
+                for df_col in df.columns:
+                    if col_name.lower() in str(df_col).lower():
+                        matching_cols.append(df_col)
+                        break
+            if len(matching_cols) == 6:
+                joint_columns = matching_cols
+                break
+        
+        # 如果找不到匹配的列名，使用前6列
+        if not joint_columns:
+            if df.shape[1] >= 6:
+                joint_columns = df.columns[:6].tolist()
+            else:
+                raise ValueError(f"数据列数不足，需要至少6列，实际{df.shape[1]}列")
+        
+        # 提取数据并转换为numpy数组
+        joint_data = df[joint_columns].values.astype(float)
+        
+        if joint_data.shape[1] != 6:
+            raise ValueError(f"关节角度数据列数错误，期望6列，实际{joint_data.shape[1]}列")
+        
+        return joint_data
+    
+    def _parse_laser_tracker_positions(self, file_path):
+        """解析激光跟踪仪格式位置数据（保持原有逻辑）"""
+        config = self.config.get('data_input', {}).get('positions', {}).get('laser_tracker', {})
+        measurement_columns = config.get('measurement_columns', [7, 8, 9, 10, 11, 12])
+        
+        laser_positions = []
+        encoding = self.detector.detect_encoding(file_path)
+        
+        with open(file_path, 'r', encoding=encoding) as f:
+            for line_num, line in enumerate(f, start=2):
+                stripped_line = line.strip()
+                if not stripped_line:
+                    continue
+                
+                parts = stripped_line.split()
+                parts = [part.strip() for part in parts if part.strip()]
+                
+                if len(parts) > max(measurement_columns):
+                    try:
+                        measured_data = [float(parts[i]) for i in measurement_columns]
+                        laser_positions.append(measured_data)
+                    except (ValueError, IndexError) as e:
+                        print(f"警告: 第{line_num}行数据解析错误: {e}")
+        
+        if not laser_positions:
+            raise ValueError("未能提取激光位置数据")
+        
+        result = np.array(laser_positions)
+        print(f"✅ 激光跟踪仪格式加载位置数据: {result.shape[0]}组数据")
+        return result
+    
+    def _parse_csv_positions(self, file_path):
+        """解析CSV格式位置数据"""
+        encoding = self.detector.detect_encoding(file_path)
+        df = pd.read_csv(file_path, encoding=encoding)
+        
+        position_data = self._extract_positions_from_df(df)
+        print(f"✅ CSV格式加载位置数据: {position_data.shape[0]}组数据")
+        return position_data
+    
+    def _parse_txt_positions(self, file_path):
+        """解析TXT格式位置数据"""
+        encoding = self.detector.detect_encoding(file_path)
+        delimiter = self.detector.detect_delimiter(file_path)
+        
+        # 先检查第一行是否包含列名（如X,Y,Z等）
+        with open(file_path, 'r', encoding=encoding) as f:
+            first_line = f.readline().strip()
+        
+        # 如果第一行包含字母（可能是列名），使用header=0，否则使用header=None
+        if any(c.isalpha() for c in first_line):
+            df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, header=0)
+        else:
+            df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, 
+                            header=None, comment='#')
+        
+        position_data = self._extract_positions_from_df(df)
+        print(f"✅ TXT格式加载位置数据: {position_data.shape[0]}组数据")
+        return position_data
+    
+    def _parse_excel_positions(self, file_path):
+        """解析Excel格式位置数据"""
+        if openpyxl is None:
+            raise ImportError("需要安装openpyxl来支持Excel格式")
+        
+        df = pd.read_excel(file_path, sheet_name=0)
+        position_data = self._extract_positions_from_df(df)
+        print(f"✅ Excel格式加载位置数据: {position_data.shape[0]}组数据")
+        return position_data
+    
+    def _extract_positions_from_df(self, df):
+        """从DataFrame智能提取位置数据"""
+        config = self.config.get('data_input', {}).get('positions', {})
+        pos_patterns = config.get('position_patterns', ["X", "Y", "Z"])
+        ori_patterns = config.get('orientation_patterns', ["Rx", "Ry", "Rz"])
+        
+        # 查找位置列
+        pos_columns = []
+        for pattern in pos_patterns:
+            for df_col in df.columns:
+                if pattern.lower() in str(df_col).lower():
+                    pos_columns.append(df_col)
+                    break
+            if len(pos_columns) == 3:
+                break
+        
+        # 查找姿态列
+        ori_columns = []
+        for pattern in ori_patterns:
+            for df_col in df.columns:
+                if pattern.lower() in str(df_col).lower():
+                    ori_columns.append(df_col)
+                    break
+            if len(ori_columns) == 3:
+                break
+        
+        # 如果找不到匹配列，使用默认列
+        if len(pos_columns) != 3 or len(ori_columns) != 3:
+            if df.shape[1] >= 6:
+                all_columns = df.columns[:6].tolist()
+                pos_columns = all_columns[:3]
+                ori_columns = all_columns[3:6]
+            else:
+                raise ValueError(f"位置数据列数不足，需要至少6列，实际{df.shape[1]}列")
+        
+        # 提取数据
+        position_data = df[pos_columns + ori_columns].values.astype(float)
+        
+        if position_data.shape[1] != 6:
+            raise ValueError(f"位置数据列数错误，期望6列，实际{position_data.shape[1]}列")
+        
+        return position_data
+
+# 全局解析器实例
+_smart_parser = None
+
+def get_smart_parser():
+    """获取智能解析器实例"""
+    global _smart_parser
+    if _smart_parser is None:
+        _smart_parser = SmartDataParser()
+    return _smart_parser
 
 def load_config(config_file=None):
     """加载配置文件"""
@@ -116,47 +473,16 @@ def get_fixed_indices():
     return config['robot_config']['fixed_indices']
 
 def extract_joint_angles_from_raw(file_path=None):
-    """直接从原始关节角度文件提取数据"""
+    """智能提取关节角度数据 - 支持多种格式"""
     config = get_config()
     
     if file_path is None:
         file_path = config['data_files']['joint_angle_raw']
     
-    # 使用固定的提取模式
-    pattern = re.compile(r'j:\s*{\s*([^}]*?)\s*}')
-    
-    joint_angles = []
-    
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                match = pattern.search(line)
-                if match:
-                    # 获取大括号内的内容
-                    content_in_braces = match.group(1)
-                    
-                    # 按逗号分割，并去除空白
-                    angles_str = [angle.strip() for angle in content_in_braces.split(',')]
-                    
-                    # 确保有足够的角度值
-                    if len(angles_str) >= 6:
-                        # 提取前6个角度值并转换为float
-                        try:
-                            extracted_angles = [float(angle) for angle in angles_str[:6] if angle]
-                            if len(extracted_angles) == 6:
-                                joint_angles.append(extracted_angles)
-                            else:
-                                print(f"警告: 第{line_num}行未能提取6个角度值")
-                        except ValueError as e:
-                            print(f"警告: 第{line_num}行数值转换错误: {e}")
-                    else:
-                        print(f"警告: 第{line_num}行数据不足6个角度值")
-        
-        if not joint_angles:
-            raise ValueError("未能从文件中提取到任何关节角度数据")
-            
-        result = np.array(joint_angles)
-        print(f"✅ 加载关节角度: {result.shape[0]}组数据")
+        # 使用智能解析器
+        parser = get_smart_parser()
+        result = parser.parse_joint_angles(file_path)
         return result
         
     except FileNotFoundError:
@@ -167,45 +493,16 @@ def extract_joint_angles_from_raw(file_path=None):
         raise
 
 def extract_laser_positions_from_raw(file_path=None):
-    """直接从原始激光位置文件提取数据"""
+    """智能提取激光位置数据 - 支持多种格式"""
     config = get_config()
     
     if file_path is None:
         file_path = config['data_files']['laser_pos_raw']
     
-    # 使用固定的提取配置
-    measurement_columns = [7, 8, 9, 10, 11, 12]  # 测量X,Y,Z,Rx,Ry,Rz列
-    
-    laser_positions = []
-    
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            
-            for line_num, line in enumerate(f, start=2):
-                stripped_line = line.strip()
-                if not stripped_line:  # 跳过空行
-                    continue
-                
-                # 分割行数据（使用空格分隔）
-                parts = stripped_line.split()
-                parts = [part.strip() for part in parts if part.strip()]  # 去除空白部分
-                
-                # 检查是否有足够的列
-                if len(parts) > max(measurement_columns):
-                    try:
-                        # 提取测量数据列
-                        measured_data = [float(parts[i]) for i in measurement_columns]
-                        laser_positions.append(measured_data)
-                    except (ValueError, IndexError) as e:
-                        print(f"警告: 第{line_num}行数据解析错误: {e}")
-                else:
-                    print(f"警告: 第{line_num}行数据列数不足，无法提取")
-        
-        if not laser_positions:
-            raise ValueError("未能从文件中提取到任何激光位置数据")
-            
-        result = np.array(laser_positions)
-        print(f"✅ 加载激光数据: {result.shape[0]}组数据")
+        # 使用智能解析器
+        parser = get_smart_parser()
+        result = parser.parse_positions(file_path)
         return result
         
     except FileNotFoundError:

@@ -198,6 +198,7 @@ pyrightconfig.json
 # Cursor编辑器配置目录和缓存文件
 .cursor/
 .cursor-settings.json
+**/.cursor/
 cursor.log
 *.cursor-bak
 

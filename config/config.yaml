@@ -59,8 +59,8 @@ optimization:
     alternate_optimization:
       max_alt_iterations: 4             # 交替优化最大循环次数
       convergence_tol: 1e-4             # 交替优化收敛阈值
-      max_sub_iterations_group1: 10    # 第一组参数子优化最大迭代次数
-      max_sub_iterations_group2: 10     # 第二组参数子优化最大迭代次数
+      max_sub_iterations_group1: 6    # 第一组参数子优化最大迭代次数
+      max_sub_iterations_group2: 6     # 第二组参数子优化最大迭代次数
     
     # 阻尼参数设置
     damping:
